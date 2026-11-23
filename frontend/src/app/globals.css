@@ -1,0 +1,324 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --accent: #0f766e;
+  --accent-soft: #ccfbf1;
+  --surface: #ffffff;
+  --canvas: #f8fafc;
+  --ink: #0f172a;
+  --muted: #475569;
+  --border: #e2e8f0;
+  --danger: #b91c1c;
+  --danger-bg: #fef2f2;
+  --success: #15803d;
+}
+
+body {
+  background-color: var(--canvas);
+  color: var(--ink);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* ============================================================================
+   MODERN WEB GUIDANCE: responsive-table
+   ============================================================================ */
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(520px, 75vh);
+  container-type: inline-size;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.table-wrapper--paged {
+  max-block-size: none;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.table-wrapper--paged .mwg-table {
+  table-layout: auto;
+}
+
+.table-wrapper--paged .mwg-table thead th {
+  background: #0f3d4c;
+  color: #f8fafc;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.25;
+  padding: 0.75rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  border-block-end: 2px solid #0a2c38;
+}
+
+.table-wrapper--paged .mwg-table tbody th,
+.table-wrapper--paged .mwg-table tbody td {
+  text-align: center;
+  padding: 0.7rem 0.65rem;
+  font-size: 0.83rem;
+  vertical-align: middle;
+  border-block-end: 1px solid #e2e8f0;
+}
+
+.table-wrapper--paged .mwg-table tbody th {
+  position: static;
+  background: transparent;
+}
+
+.table-wrapper--paged .mwg-table tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.table-wrapper--paged .mwg-table tbody tr:hover {
+  background: #f0fdfa;
+}
+
+.table-wrapper--paged .mwg-table tfoot th,
+.table-wrapper--paged .mwg-table tfoot td {
+  text-align: center;
+  vertical-align: middle;
+  padding: 0.8rem 0.65rem;
+  border-block-start: 2px solid #99f6e4;
+}
+
+@container (width < 640px) {
+  .table-wrapper--paged .mwg-table,
+  .table-wrapper--paged .mwg-table thead,
+  .table-wrapper--paged .mwg-table tbody,
+  .table-wrapper--paged .mwg-table tfoot,
+  .table-wrapper--paged .mwg-table tr,
+  .table-wrapper--paged .mwg-table th,
+  .table-wrapper--paged .mwg-table td {
+    display: block;
+  }
+
+  .table-wrapper--paged .mwg-table thead {
+    display: none;
+  }
+
+  .table-wrapper--paged .mwg-table tbody tr,
+  .table-wrapper--paged .mwg-table tfoot tr {
+    margin: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+  }
+
+  .table-wrapper--paged .mwg-table tbody th,
+  .table-wrapper--paged .mwg-table tfoot th {
+    text-align: left;
+    background: #0f3d4c;
+    color: #ffffff;
+    padding: 0.65rem 0.9rem;
+    border-block-end: none;
+  }
+
+  .table-wrapper--paged .mwg-table tbody th * {
+    color: inherit;
+  }
+
+  .table-wrapper--paged .mwg-table tbody td,
+  .table-wrapper--paged .mwg-table tfoot td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: right;
+    padding: 0.55rem 0.9rem;
+    gap: 0.75rem;
+    white-space: normal;
+  }
+
+  .table-wrapper--paged .mwg-table tbody td::before,
+  .table-wrapper--paged .mwg-table tfoot td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: left;
+  }
+}
+
+.table-wrapper:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mwg-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+}
+
+.mwg-table caption {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: #f8fafc;
+  border-block-end: 1px solid var(--border);
+}
+
+.mwg-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+}
+
+.mwg-table thead th {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.65rem 0.85rem;
+  border-block-end: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.mwg-table tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--surface);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.65rem 0.85rem;
+  border-block-end: 1px solid #f1f5f9;
+  white-space: nowrap;
+}
+
+.mwg-table tbody td {
+  padding: 0.65rem 0.85rem;
+  border-block-end: 1px solid #f1f5f9;
+  color: #1e293b;
+  white-space: nowrap;
+}
+
+.mwg-table tbody tr:hover th,
+.mwg-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+@container (width < 560px) {
+  .mwg-table,
+  .mwg-table thead,
+  .mwg-table tbody,
+  .mwg-table tr,
+  .mwg-table th,
+  .mwg-table td {
+    display: block;
+  }
+
+  .mwg-table thead {
+    display: none;
+  }
+
+  .mwg-table tbody tr {
+    margin: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+
+  .mwg-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: #f1f5f9;
+    border-block-end: 1px solid var(--border);
+  }
+
+  .mwg-table tbody td {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    white-space: normal;
+  }
+
+  .mwg-table tbody td::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    color: var(--muted);
+  }
+}
+
+/* ============================================================================
+   MODERN WEB GUIDANCE: tabs (single-row scroll + border-block-end indicator)
+   ============================================================================ */
+.mwg-tablist {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 0.25rem;
+  border-block-end: 1px solid var(--border);
+  scroll-snap-type: inline proximity;
+}
+
+.mwg-tablist [role="tab"] {
+  position: relative;
+  flex: none;
+  scroll-snap-align: start;
+  padding: 0.65rem 1.1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.mwg-tablist [role="tab"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 0.25rem;
+}
+
+.mwg-tablist [role="tab"][aria-selected="true"] {
+  color: var(--accent);
+}
+
+.mwg-tablist [role="tab"][aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  border-block-end: 3px solid var(--accent);
+}
+
+/* ============================================================================
+   MODERN WEB GUIDANCE: validate-input-after-interaction (:user-invalid)
+   ============================================================================ */
+.mwg-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-block-end: 0.3rem;
+}
+
+.mwg-error-msg {
+  display: none;
+  color: var(--danger);
+  font-size: 0.8rem;
+  margin-block-start: 0.3rem;
+  font-weight: 500;
+}
+
+.mwg-field :is(input, select, textarea):is(:user-invalid, .user-invalid-fallback) {
+  border-color: var(--danger);
+  background-color: var(--danger-bg);
+}
+
+.mwg-field :is(input, select, textarea):is(:user-invalid, .user-invalid-fallback) + .mwg-error-msg {
+  display: block;
+}
+
+.mwg-field :is(input, select, textarea):user-valid {
+  border-color: var(--success);
+}
