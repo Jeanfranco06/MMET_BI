@@ -78,6 +78,8 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
   const [corte, setCorte] = useState(corteInicial);
   const [idPrograma, setIdPrograma] = useState('');
   const [idPractica, setIdPractica] = useState('');
+  const [facultad, setFacultad] = useState('');
+  const [ciclo, setCiclo] = useState('');
   const [estado, setEstado] = useState('');
   const [buscarInput, setBuscarInput] = useState('');
   const [buscar, setBuscar] = useState('');
@@ -111,6 +113,8 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
         semestre: semestre || undefined,
         id_programa: idPrograma || undefined,
         id_practica: idPractica || undefined,
+        facultad: facultad || undefined,
+        ciclo: ciclo || undefined,
         estado: estado || undefined,
         buscar: buscar || undefined,
         page,
@@ -122,7 +126,7 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
     } finally {
       setLoading(false);
     }
-  }, [corte, semestre, idPrograma, idPractica, estado, buscar, page, pageSize]);
+  }, [corte, semestre, idPrograma, idPractica, facultad, ciclo, estado, buscar, page, pageSize]);
 
   useEffect(() => {
     cargar();
@@ -131,13 +135,15 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
   const limpiarFiltros = () => {
     setIdPrograma('');
     setIdPractica('');
+    setFacultad('');
+    setCiclo('');
     setEstado('');
     setBuscarInput('');
     setBuscar('');
     setPage(1);
   };
 
-  const hayFiltrosActivos = Boolean(idPrograma || idPractica || estado || buscar);
+  const hayFiltrosActivos = Boolean(idPrograma || idPractica || facultad || ciclo || estado || buscar);
   const rt = data?.resumen_total;
   const pag = data?.paginacion;
 
@@ -165,7 +171,7 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
           </p>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <label className="block">
             <span className="block text-xs font-medium text-slate-600 mb-1">Fecha de corte</span>
             <div className="relative">
@@ -243,7 +249,45 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
           </label>
 
           <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Buscar estudiante</span>
+            <span className="block text-xs font-medium text-slate-600 mb-1">Facultad / Área</span>
+            <select
+              value={facultad}
+              onChange={(e) => {
+                setFacultad(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
+            >
+              <option value="">Todas las facultades</option>
+              {filtros?.facultades.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-medium text-slate-600 mb-1">Ciclo académico</span>
+            <select
+              value={ciclo}
+              onChange={(e) => {
+                setCiclo(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
+            >
+              <option value="">Todos los ciclos</option>
+              {(filtros?.ciclos || []).map((c) => (
+                <option key={c} value={c}>
+                  Ciclo {c}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block sm:col-span-2">
+            <span className="block text-xs font-medium text-slate-600 mb-1">Buscar estudiante (código)</span>
             <div className="relative">
               <Search
                 className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none"
@@ -320,70 +364,97 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
                   <th scope="col">Asistencias</th>
                   <th scope="col">Inasistencias</th>
                   <th scope="col">Asistencia (%)</th>
+                  <th scope="col">Primera asistencia</th>
                   <th scope="col">Última asistencia</th>
+                  <th scope="col">Evaluable</th>
                   <th scope="col">Estado de continuidad</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && !data ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-slate-500">
+                    <td colSpan={10} className="text-center py-10 text-slate-500">
                       Consultando asistencias en SQL Server...
                     </td>
                   </tr>
                 ) : !data?.estudiantes?.length ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-slate-500">
+                    <td colSpan={10} className="text-center py-10 text-slate-500">
                       No se encontraron estudiantes para los filtros seleccionados.
                     </td>
                   </tr>
                 ) : (
-                  data.estudiantes.map((r: any) => (
-                    <tr key={r.id_asignacion}>
-                      <th scope="row">
-                        <div className="font-semibold text-slate-900">{r.codigo_anonimizado}</div>
-                        <div
-                          className="text-[11px] font-normal text-slate-500 truncate max-w-[155px] mx-auto"
-                          title={r.facultad_o_area}
-                        >
-                          {r.facultad_o_area}
-                        </div>
-                      </th>
-                      <td data-label="Programa" title={r.codigo_programa}>
-                        <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium text-xs border border-slate-200/80">
-                          {compactPrograma(r.codigo_programa)}
-                        </span>
-                      </td>
-                      <td data-label="Sesiones exigibles" className="tabular-nums font-medium text-slate-700">
-                        {r.sesiones_exigibles}
-                      </td>
-                      <td data-label="Asistencias" className="tabular-nums font-semibold text-emerald-700">
-                        {r.asistencias}
-                      </td>
-                      <td data-label="Inasistencias" className="tabular-nums font-medium text-slate-600">
-                        {r.inasistencias}
-                      </td>
-                      <td data-label="Asistencia (%)" className="tabular-nums font-bold">
-                        <span
-                          className={
-                            r.asistencia_pct >= 80
-                              ? 'text-emerald-700'
-                              : r.asistencia_pct >= 60
-                                ? 'text-amber-700'
-                                : 'text-rose-700'
-                          }
-                        >
-                          {r.asistencia_pct.toFixed(1)}%
-                        </span>
-                      </td>
-                      <td data-label="Última asistencia" className="tabular-nums text-slate-700">
-                        {formatFechaEs(r.ultima_asistencia)}
-                      </td>
-                      <td data-label="Estado de continuidad">
-                        <EstadoContinuidadBadge estado={r.estado_continuidad} />
-                      </td>
-                    </tr>
-                  ))
+                  data.estudiantes.map((r: any) => {
+                    const esEvaluable =
+                      typeof r.es_evaluable === 'boolean'
+                        ? r.es_evaluable
+                        : Number(r.sesiones_exigibles || 0) >= 3;
+                    return (
+                      <tr key={r.id_asignacion}>
+                        <th scope="row">
+                          <div className="font-semibold text-slate-900">{r.codigo_anonimizado}</div>
+                          <div
+                            className="text-[11px] font-normal text-slate-500 truncate max-w-[175px] mx-auto"
+                            title={
+                              r.ciclo_academico != null
+                                ? `${r.facultad_o_area} · Ciclo ${r.ciclo_academico}`
+                                : r.facultad_o_area
+                            }
+                          >
+                            {r.facultad_o_area}
+                            {r.ciclo_academico != null ? ` · Ciclo ${r.ciclo_academico}` : ''}
+                          </div>
+                        </th>
+                        <td data-label="Programa" title={r.codigo_programa}>
+                          <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium text-xs border border-slate-200/80">
+                            {compactPrograma(r.codigo_programa)}
+                          </span>
+                        </td>
+                        <td data-label="Sesiones exigibles" className="tabular-nums font-medium text-slate-700">
+                          {r.sesiones_exigibles}
+                        </td>
+                        <td data-label="Asistencias" className="tabular-nums font-semibold text-emerald-700">
+                          {r.asistencias}
+                        </td>
+                        <td data-label="Inasistencias" className="tabular-nums font-medium text-slate-600">
+                          {r.inasistencias}
+                        </td>
+                        <td data-label="Asistencia (%)" className="tabular-nums font-bold">
+                          <span
+                            className={
+                              r.asistencia_pct >= 80
+                                ? 'text-emerald-700'
+                                : r.asistencia_pct >= 60
+                                  ? 'text-amber-700'
+                                  : 'text-rose-700'
+                            }
+                          >
+                            {r.asistencia_pct.toFixed(1)}%
+                          </span>
+                        </td>
+                        <td data-label="Primera asistencia" className="tabular-nums text-slate-700">
+                          {formatFechaEs(r.primera_asistencia)}
+                        </td>
+                        <td data-label="Última asistencia" className="tabular-nums text-slate-700">
+                          {formatFechaEs(r.ultima_asistencia)}
+                        </td>
+                        <td data-label="Evaluable">
+                          <span
+                            className={
+                              esEvaluable
+                                ? 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200'
+                                : 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-300'
+                            }
+                          >
+                            {esEvaluable ? 'Sí' : 'No'}
+                          </span>
+                        </td>
+                        <td data-label="Estado de continuidad">
+                          <EstadoContinuidadBadge estado={r.estado_continuidad} />
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
 
@@ -396,8 +467,8 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
                         {rt.total_registros.toLocaleString()} estudiantes
                       </div>
                     </th>
-                    <td data-label="Programa" className="text-slate-600 font-medium">
-                      {rt.evaluables.toLocaleString()} evaluables
+                    <td data-label="Programa" className="text-slate-400">
+                      —
                     </td>
                     <td data-label="Sesiones exigibles" className="tabular-nums font-bold">
                       {rt.sesiones_exigibles.toLocaleString()}
@@ -411,11 +482,27 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
                     <td data-label="Asistencia (%)" className="tabular-nums font-bold text-teal-900">
                       {rt.asistencia_pct != null ? `${rt.asistencia_pct.toFixed(1)}%` : '—'}
                     </td>
+                    <td data-label="Primera asistencia" className="text-slate-400">
+                      —
+                    </td>
                     <td data-label="Última asistencia" className="text-slate-400">
                       —
                     </td>
+                    <td data-label="Evaluable" className="whitespace-nowrap">
+                      <div className="font-bold text-teal-900">
+                        {rt.evaluables.toLocaleString()} evaluables
+                      </div>
+                      <div className="text-[11px] font-medium text-slate-600">
+                        {rt.no_evaluables.toLocaleString()} no evaluables
+                      </div>
+                    </td>
                     <td data-label="Estado de continuidad" className="whitespace-normal leading-snug font-semibold text-slate-700">
-                      {rt.activos} activos · {rt.en_riesgo} en riesgo · {rt.abandono} abandonos · {rt.retirados} retirados
+                      <div>
+                        {rt.activos} activos · {rt.en_riesgo} en riesgo · {rt.abandono} abandonos · {rt.retirados} retirados
+                      </div>
+                      <div className="text-[11px] font-bold text-teal-900 mt-0.5">
+                        {rt.continuan.toLocaleString()} continúan
+                      </div>
                     </td>
                   </tr>
                 </tfoot>

@@ -51,6 +51,7 @@ export interface FiltrosResponse {
     estado_programa: string;
   }>;
   facultades: string[];
+  ciclos?: number[];
   gruposEtarios: string[];
   sexos: string[];
   semestres: string[];
@@ -146,6 +147,8 @@ export const api = {
     semestre?: string;
     id_programa?: string;
     id_practica?: string;
+    facultad?: string;
+    ciclo?: string;
     estado?: string;
     buscar?: string;
     page?: number;

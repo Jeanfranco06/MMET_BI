@@ -54,7 +54,7 @@ export class AnalyticsService {
   }
 
   async getFiltros() {
-    const [practicas, programas, facultades, gruposEtarios, sexos, rangoFechas] = await Promise.all([
+    const [practicas, programas, facultades, ciclos, gruposEtarios, sexos, rangoFechas] = await Promise.all([
       this.db.query(`
         SELECT id_practica, codigo_practica, nombre_practica, descripcion, es_mixto
         FROM dbo.cat_practicas
@@ -77,6 +77,11 @@ export class AnalyticsService {
         ORDER BY facultad_o_area
       `),
       this.db.query(`
+        SELECT DISTINCT ciclo_academico
+        FROM dbo.estudiantes
+        ORDER BY ciclo_academico
+      `),
+      this.db.query(`
         SELECT DISTINCT grupo_etario
         FROM dbo.estudiantes
         ORDER BY grupo_etario
@@ -97,6 +102,7 @@ export class AnalyticsService {
       practicas,
       programas,
       facultades: facultades.map((f) => f.facultad),
+      ciclos: ciclos.map((c) => Number(c.ciclo_academico)),
       gruposEtarios: gruposEtarios.map((g) => g.grupo_etario),
       sexos: sexos.map((s) => s.sexo_codificado),
       semestres: Array.from(new Set(programas.map((p: any) => p.periodo_academico))),
@@ -708,6 +714,8 @@ export class AnalyticsService {
     semestre?: string;
     idPrograma?: number;
     idPractica?: number;
+    facultad?: string;
+    ciclo?: number;
     estado?: string;
     buscar?: string;
     page?: number;
@@ -722,6 +730,8 @@ export class AnalyticsService {
       semestre: f.semestre ?? null,
       idPrograma: f.idPrograma ?? null,
       idPractica: f.idPractica ?? null,
+      facultad: f.facultad ?? null,
+      ciclo: f.ciclo ?? null,
       estado: f.estado ?? null,
       buscar: f.buscar ? `%${f.buscar}%` : null,
       offset,
@@ -744,6 +754,7 @@ export class AnalyticsService {
       ses_post AS (
         SELECT
           a.id_asignacion, a.id_estudiante, a.id_programa, a.fecha_retiro,
+          pa.fecha_primera,
           sc.id_sesion, sc.fecha_sesion, asis.estado_asistencia,
           ROW_NUMBER() OVER (PARTITION BY a.id_asignacion ORDER BY sc.fecha_sesion DESC, sc.numero_sesion DESC) AS rn_reciente,
           COUNT(*) OVER (PARTITION BY a.id_asignacion) AS sesiones_exigibles
@@ -762,6 +773,7 @@ export class AnalyticsService {
           MAX(sesiones_exigibles) AS sesiones_exigibles,
           SUM(CASE WHEN estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistencias,
           SUM(CASE WHEN estado_asistencia = N'INASISTENCIA' THEN 1 ELSE 0 END) AS inasistencias,
+          MIN(fecha_primera) AS primera_asistencia,
           MAX(CASE WHEN estado_asistencia = N'ASISTIO' THEN fecha_sesion END) AS ultima_asistencia,
           MAX(fecha_retiro) AS fecha_retiro,
           MAX(CASE WHEN rn_reciente = 1 AND estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistio_ultima,
@@ -777,8 +789,10 @@ export class AnalyticsService {
           c.sesiones_exigibles,
           c.asistencias,
           c.inasistencias,
+          c.primera_asistencia,
           c.ultima_asistencia,
           c.fecha_retiro,
+          CASE WHEN c.sesiones_exigibles >= 3 THEN 1 ELSE 0 END AS es_evaluable,
           CAST(ROUND((CAST(c.asistencias AS FLOAT) / NULLIF(c.sesiones_exigibles, 0)) * 100.0, 1) AS DECIMAL(5,1)) AS asistencia_pct,
           CASE
             WHEN c.sesiones_exigibles < 3 THEN N'NO_EVALUABLE'
@@ -794,6 +808,7 @@ export class AnalyticsService {
           e.*,
           es.codigo_anonimizado,
           es.facultad_o_area,
+          es.ciclo_academico,
           p.codigo_programa,
           p.nombre_programa,
           cp.codigo_practica,
@@ -803,6 +818,8 @@ export class AnalyticsService {
         JOIN dbo.programas p ON p.id_programa = e.id_programa
         JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
         WHERE (@estado IS NULL OR e.estado_continuidad = @estado)
+          AND (@facultad IS NULL OR es.facultad_o_area = @facultad)
+          AND (@ciclo IS NULL OR es.ciclo_academico = @ciclo)
           AND (@buscar IS NULL OR es.codigo_anonimizado LIKE @buscar)
       )
     `;
@@ -831,6 +848,7 @@ export class AnalyticsService {
           id_asignacion,
           codigo_anonimizado,
           facultad_o_area,
+          ciclo_academico,
           codigo_programa,
           codigo_practica,
           nombre_practica,
@@ -838,8 +856,10 @@ export class AnalyticsService {
           asistencias,
           inasistencias,
           asistencia_pct,
+          CONVERT(VARCHAR(10), primera_asistencia, 23) AS primera_asistencia,
           CONVERT(VARCHAR(10), ultima_asistencia, 23) AS ultima_asistencia,
           CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro,
+          es_evaluable,
           estado_continuidad
         FROM filtrado
         ORDER BY
@@ -910,6 +930,7 @@ export class AnalyticsService {
       },
       estudiantes: estudiantesRows.map((r) => ({
         ...r,
+        es_evaluable: Boolean(r.es_evaluable),
         asistencia_pct: r.asistencia_pct != null ? Number(r.asistencia_pct) : 0,
       })),
       por_programa: porProgramaRaw.map((r) => {
