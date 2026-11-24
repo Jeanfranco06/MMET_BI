@@ -51,6 +51,8 @@ export interface FiltrosResponse {
     estado_programa: string;
   }>;
   facultades: string[];
+  gruposEtarios: string[];
+  sexos: string[];
   semestres: string[];
   rangoFechas: { fecha_min: string; fecha_max: string };
 }
@@ -120,8 +122,25 @@ export const api = {
   getFiltros: () => apiGet<FiltrosResponse>('/analytics/filtros'),
   getResumen: (params: { corte: string; id_programa?: string; id_practica?: string; facultad?: string }) =>
     apiGet<ResumenResponse>('/analytics/resumen', params),
-  getImpactoPracticas: (params: { instrumento: 'PSS-10' | 'PCL-5'; corte: string; facultad?: string }) =>
-    apiGet<any>('/analytics/impacto-practicas', params),
+  getEvolucion: (params: {
+    corte: string;
+    semestre?: string;
+    facultad?: string;
+    id_programa?: string;
+    id_practica?: string;
+    grupo_etario?: string;
+    sexo?: string;
+    instrumento?: 'PSS-10' | 'PCL-5' | '';
+    agrupar_por?: 'programa' | 'facultad' | 'grupo_etario';
+    page?: number;
+    pageSize?: number;
+  }) => apiGet<any>('/analytics/evolucion', params),
+  getImpactoPracticas: (params: {
+    instrumento: 'PSS-10' | 'PCL-5';
+    corte: string;
+    semestre?: string;
+    facultad?: string;
+  }) => apiGet<any>('/analytics/impacto-practicas', params),
   getContinuidad: (params: {
     corte: string;
     semestre?: string;
@@ -132,8 +151,16 @@ export const api = {
     page?: number;
     pageSize?: number;
   }) => apiGet<any>('/analytics/continuidad', params),
-  getCumplimiento: (params: { corte: string; id_programa?: string; instrumento?: string }) =>
-    apiGet<any>('/analytics/cumplimiento', params),
+  getCumplimiento: (params: {
+    corte: string;
+    semestre?: string;
+    id_programa?: string;
+    instrumento?: string;
+    estado?: string;
+    buscar?: string;
+    page?: number;
+    pageSize?: number;
+  }) => apiGet<any>('/analytics/cumplimiento', params),
   getSesiones: (id_programa?: string) => apiGet<any[]>('/operacion/sesiones', { id_programa }),
   getOportunidadesAbiertas: (id_programa?: string) =>
     apiGet<any[]>('/operacion/oportunidades-abiertas', { id_programa }),
