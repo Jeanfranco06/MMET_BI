@@ -70,7 +70,9 @@ function EstadoEvaluacionBadge({ estado }: { estado: string }) {
 export function CumplimientoReport({ filtros, corteInicial, semestre }: CumplimientoReportProps) {
   const [corte, setCorte] = useState(corteInicial);
   const [idPrograma, setIdPrograma] = useState('');
+  const [facultad, setFacultad] = useState('');
   const [instrumento, setInstrumento] = useState<'' | 'PSS-10' | 'PCL-5'>('');
+  const [categoriaEvento, setCategoriaEvento] = useState('');
   const [estado, setEstado] = useState('');
   const [buscarInput, setBuscarInput] = useState('');
   const [buscar, setBuscar] = useState('');
@@ -103,7 +105,9 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
         corte,
         semestre: semestre || undefined,
         id_programa: idPrograma || undefined,
+        facultad: facultad || undefined,
         instrumento: instrumento || undefined,
+        categoria_evento: categoriaEvento || undefined,
         estado: estado || undefined,
         buscar: buscar || undefined,
         page,
@@ -115,7 +119,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
     } finally {
       setLoading(false);
     }
-  }, [corte, semestre, idPrograma, instrumento, estado, buscar, page, pageSize]);
+  }, [corte, semestre, idPrograma, facultad, instrumento, categoriaEvento, estado, buscar, page, pageSize]);
 
   useEffect(() => {
     cargar();
@@ -123,14 +127,18 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
 
   const limpiarFiltros = () => {
     setIdPrograma('');
+    setFacultad('');
     setInstrumento('');
+    setCategoriaEvento('');
     setEstado('');
     setBuscarInput('');
     setBuscar('');
     setPage(1);
   };
 
-  const hayFiltrosActivos = Boolean(idPrograma || instrumento || estado || buscar);
+  const hayFiltrosActivos = Boolean(
+    idPrograma || facultad || instrumento || categoriaEvento || estado || buscar,
+  );
   const rt = data?.resumen_total;
   const pag = data?.paginacion;
 
@@ -145,7 +153,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
       <section className="bg-white rounded-xl border border-slate-200 p-5">
         <div>
           <h2 className="text-xl font-bold text-slate-900">
-            Control de Evaluaciones Psicológicas Pendientes y Completadas (KPI-04)
+            Control de Evaluaciones Psicológicas Pendientes y Completadas
           </h2>
           <p className="text-sm text-slate-500 mt-1">
             Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
@@ -156,7 +164,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
           </p>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <label className="block">
             <span className="block text-xs font-medium text-slate-600 mb-1">Fecha de corte</span>
             <div className="relative">
@@ -230,7 +238,45 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
           </label>
 
           <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Buscar estudiante</span>
+            <span className="block text-xs font-medium text-slate-600 mb-1">Facultad / Área</span>
+            <select
+              value={facultad}
+              onChange={(e) => {
+                setFacultad(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
+            >
+              <option value="">Todas las facultades</option>
+              {filtros?.facultades.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-medium text-slate-600 mb-1">Evento índice (PCL-5)</span>
+            <select
+              value={categoriaEvento}
+              onChange={(e) => {
+                setCategoriaEvento(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
+            >
+              <option value="">Todos los eventos</option>
+              {(filtros?.categoriasEvento || []).map((c) => (
+                <option key={c.codigo_categoria} value={c.codigo_categoria}>
+                  {c.codigo_categoria} · {c.nombre_categoria}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block sm:col-span-2">
+            <span className="block text-xs font-medium text-slate-600 mb-1">Buscar estudiante (código)</span>
             <div className="relative">
               <Search
                 className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none"
@@ -306,6 +352,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
                   <th scope="col">Momento</th>
                   <th scope="col">Ventana prevista</th>
                   <th scope="col">Fecha realización</th>
+                  <th scope="col">Puntaje / Versión</th>
                   <th scope="col">Estado evaluación</th>
                   <th scope="col">Par válido</th>
                 </tr>
@@ -313,13 +360,13 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
               <tbody>
                 {loading && !data ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-slate-500">
+                    <td colSpan={9} className="text-center py-10 text-slate-500">
                       Consultando oportunidades de evaluación en SQL Server...
                     </td>
                   </tr>
                 ) : !data?.oportunidades?.length ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-slate-500">
+                    <td colSpan={9} className="text-center py-10 text-slate-500">
                       No se encontraron oportunidades de evaluación para los filtros seleccionados.
                     </td>
                   </tr>
@@ -336,11 +383,11 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
                         >
                           {r.codigo_instrumento}
                         </span>
-                        {r.codigo_evento_local && (
-                          <div className="text-[11px] font-normal text-slate-500 mt-0.5" title={r.categoria_evento || ''}>
-                            {r.codigo_evento_local}
-                          </div>
-                        )}
+                        <div className="text-[11px] font-normal text-slate-500 mt-0.5">
+                          {r.codigo_evento_local
+                            ? `${r.codigo_evento_local}${r.categoria_evento ? ` · ${r.categoria_evento}` : ''}`
+                            : 'No aplica'}
+                        </div>
                       </th>
                       <td data-label="Estudiante">
                         <div className="font-semibold text-slate-900">{r.codigo_anonimizado}</div>
@@ -363,14 +410,15 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
                         {formatFechaEs(r.fecha_ventana_inicio)} – {formatFechaEs(r.fecha_ventana_fin)}
                       </td>
                       <td data-label="Fecha realización" className="tabular-nums text-slate-700">
-                        {r.fecha_realizacion ? (
+                        {formatFechaEs(r.fecha_realizacion)}
+                      </td>
+                      <td data-label="Puntaje / Versión" className="tabular-nums text-slate-700">
+                        {r.puntaje_total != null ? (
                           <div>
-                            <div>{formatFechaEs(r.fecha_realizacion)}</div>
-                            {r.puntaje_total != null && (
-                              <div className="text-[11px] text-slate-500">
-                                {r.puntaje_total} pts {r.numero_version > 1 ? `(v${r.numero_version})` : ''}
-                              </div>
-                            )}
+                            <span className="font-semibold text-slate-900">{r.puntaje_total} pts</span>
+                            <span className="text-[11px] text-slate-500 ml-1">
+                              v{r.numero_version ?? 1}
+                            </span>
                           </div>
                         ) : (
                           '—'
@@ -404,25 +452,22 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
                         {rt.elegibles.toLocaleString()} elegibles
                       </div>
                     </th>
-                    <td data-label="Estudiante" className="text-slate-600 font-medium">
-                      {rt.total_completadas.toLocaleString()} completadas
+                    <td className="text-slate-400">—</td>
+                    <td className="text-slate-400">—</td>
+                    <td className="text-slate-400">—</td>
+                    <td className="text-slate-400">—</td>
+                    <td className="text-slate-400">—</td>
+                    <td className="text-slate-400">—</td>
+                    <td data-label="Estado evaluación" className="whitespace-normal leading-snug font-semibold text-slate-700">
+                      <div>
+                        {rt.completadas_en_ventana.toLocaleString()} en ventana · {rt.completadas_tardias.toLocaleString()} tardías ·{' '}
+                        {rt.pendientes_en_ventana.toLocaleString()} pendientes · {rt.vencidas.toLocaleString()} vencidas
+                      </div>
+                      <div className="text-[11px] font-bold text-teal-900 mt-0.5">
+                        {rt.total_completadas.toLocaleString()} completadas
+                      </div>
                     </td>
-                    <td data-label="Programa" className="tabular-nums font-bold text-emerald-800">
-                      {rt.completadas_en_ventana.toLocaleString()} en ventana
-                    </td>
-                    <td data-label="Momento" className="tabular-nums font-bold text-amber-800">
-                      {rt.completadas_tardias.toLocaleString()} tardías
-                    </td>
-                    <td data-label="Ventana prevista" className="tabular-nums font-bold text-sky-800">
-                      {rt.pendientes_en_ventana.toLocaleString()} pendientes
-                    </td>
-                    <td data-label="Fecha realización" className="tabular-nums font-bold text-rose-800">
-                      {rt.vencidas.toLocaleString()} vencidas
-                    </td>
-                    <td data-label="Estado evaluación" className="tabular-nums font-bold text-teal-900">
-                      KPI-04: {rt.tasa_cumplimiento != null ? `${rt.tasa_cumplimiento.toFixed(1)}%` : 'Suprimido'}
-                    </td>
-                    <td data-label="Par válido" className="tabular-nums font-bold text-slate-700">
+                    <td data-label="Par válido" className="tabular-nums font-bold text-slate-700 whitespace-nowrap">
                       {rt.en_par_valido.toLocaleString()} en par
                     </td>
                   </tr>
@@ -479,15 +524,15 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
         )}
       </section>
 
-      {/* Leyenda y fórmulas DEBAJO del listado */}
-      <section aria-label="Leyenda de estados de evaluación y fórmulas de cálculo" className="space-y-3 pt-1">
+      {/* Leyenda y reglas operacionales DEBAJO del listado */}
+      <section aria-label="Leyenda de estados de evaluación y reglas de cómputo" className="space-y-3 pt-1">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 mt-1.5 shrink-0" aria-hidden="true" />
             <div>
               <div className="text-xs font-semibold text-slate-900">En ventana</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Completada dentro del rango reglamentario; habilita pares válidos para KPI-01/02.
+                Completada dentro del rango reglamentario; habilita la conformación de pares válidos.
               </p>
             </div>
           </div>
@@ -497,7 +542,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
             <div>
               <div className="text-xs font-semibold text-slate-900">Tardía</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Completada fuera de ventana; cuenta para KPI-04 pero se excluye de pares KPI-01/02.
+                Completada fuera de la ventana prevista hasta la fecha de corte; no conforma par válido en ventana.
               </p>
             </div>
           </div>
@@ -526,20 +571,20 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
         <details className="bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-600">
           <summary className="cursor-pointer font-medium text-slate-700 inline-flex items-center gap-1.5 select-none">
             <Info className="w-3.5 h-3.5 text-teal-700" aria-hidden="true" />
-            Ver fórmulas y reglas de cómputo aplicadas
+            Ver reglas de cómputo aplicadas
           </summary>
           <div className="mt-2.5 pt-2.5 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3 leading-relaxed">
-            <div>
-              <strong className="text-slate-800 block">Tasa de cumplimiento (KPI-04)</strong>
-              <code>(En ventana + Tardías) ÷ Evaluaciones elegibles × 100</code>. Bueno ≥ 90%, Regular ≥ 70%, Malo &lt; 70%.
-            </div>
             <div>
               <strong className="text-slate-800 block">Elegibilidad al corte</strong>
               Solo incluye oportunidades <code>aplicable = 1</code> cuya ventana inició hasta la fecha de corte; excluye casos sin evento índice en PCL-5.
             </div>
             <div>
+              <strong className="text-slate-800 block">Condición de par válido</strong>
+              Requiere evaluación inicial y final vigentes en ventana (y mismo evento índice en PCL-5).
+            </div>
+            <div>
               <strong className="text-slate-800 block">Versionado de correcciones</strong>
-              Cada oportunidad conserva un único resultado vigente (<code>es_vigente = 1</code>); las correcciones se muestran como <code>v2+</code>.
+              Cada oportunidad conserva un único resultado vigente (<code>es_vigente = 1</code>); las correcciones auditadas se registran como <code>v2+</code>.
             </div>
           </div>
         </details>

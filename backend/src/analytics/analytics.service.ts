@@ -54,7 +54,7 @@ export class AnalyticsService {
   }
 
   async getFiltros() {
-    const [practicas, programas, facultades, ciclos, gruposEtarios, sexos, rangoFechas] = await Promise.all([
+    const [practicas, programas, facultades, ciclos, gruposEtarios, sexos, categoriasEvento, rangoFechas] = await Promise.all([
       this.db.query(`
         SELECT id_practica, codigo_practica, nombre_practica, descripcion, es_mixto
         FROM dbo.cat_practicas
@@ -92,6 +92,12 @@ export class AnalyticsService {
         ORDER BY sexo_codificado
       `),
       this.db.query(`
+        SELECT id_categoria_evento, codigo_categoria, nombre_categoria
+        FROM dbo.cat_categorias_evento_indice
+        WHERE activo = 1
+        ORDER BY id_categoria_evento
+      `),
+      this.db.query(`
         SELECT CONVERT(VARCHAR(10), MIN(fecha_inicio), 23) AS fecha_min,
                CONVERT(VARCHAR(10), MAX(ventana_final_fin), 23) AS fecha_max
         FROM dbo.programas
@@ -105,6 +111,7 @@ export class AnalyticsService {
       ciclos: ciclos.map((c) => Number(c.ciclo_academico)),
       gruposEtarios: gruposEtarios.map((g) => g.grupo_etario),
       sexos: sexos.map((s) => s.sexo_codificado),
+      categoriasEvento,
       semestres: Array.from(new Set(programas.map((p: any) => p.periodo_academico))),
       rangoFechas: rangoFechas[0] || { fecha_min: '2026-08-01', fecha_max: '2026-12-31' },
     };
@@ -363,6 +370,7 @@ export class AnalyticsService {
     grupoEtario?: string;
     sexo?: string;
     instrumento?: 'PSS-10' | 'PCL-5';
+    categoriaEvento?: string;
     agruparPor?: 'programa' | 'facultad' | 'grupo_etario';
     page?: number;
     pageSize?: number;
@@ -381,30 +389,33 @@ export class AnalyticsService {
       grupoEtario: f.grupoEtario ?? null,
       sexo: f.sexo ?? null,
       instrumento: f.instrumento ?? null,
+      categoriaEvento: f.categoriaEvento ?? null,
       offset,
       pageSize,
     };
 
     const dimSelect =
       agruparPor === 'facultad'
-        ? `facultad_o_area AS dim_clave, facultad_o_area AS dim_subtitulo, N'' AS codigo_practica`
+        ? `facultad_o_area AS dim_clave, facultad_o_area AS dim_subtitulo, N'' AS codigo_practica, N'' AS estado_programa`
         : agruparPor === 'grupo_etario'
-          ? `grupo_etario AS dim_clave, N'Grupo etario (' + grupo_etario + N' años)' AS dim_subtitulo, N'' AS codigo_practica`
-          : `codigo_programa AS dim_clave, codigo_practica + N' · ' + nombre_practica AS dim_subtitulo, codigo_practica`;
+          ? `grupo_etario AS dim_clave, N'Grupo etario (' + grupo_etario + N' años)' AS dim_subtitulo, N'' AS codigo_practica, N'' AS estado_programa`
+          : `codigo_programa AS dim_clave, codigo_practica + N' · ' + nombre_practica AS dim_subtitulo, codigo_practica, estado_programa`;
 
     const dimGroup =
       agruparPor === 'facultad'
         ? `facultad_o_area`
         : agruparPor === 'grupo_etario'
           ? `grupo_etario`
-          : `codigo_programa, codigo_practica, nombre_practica`;
+          : `codigo_programa, codigo_practica, nombre_practica, estado_programa`;
 
     const baseCte = `
       WITH pares AS (
         SELECT
           op_ini.codigo_instrumento,
+          ci.version_instrumento,
           p.id_programa,
           p.codigo_programa,
+          p.estado_programa,
           cp.codigo_practica,
           cp.nombre_practica,
           e.facultad_o_area,
@@ -414,6 +425,7 @@ export class AnalyticsService {
           r_fin.puntaje_total AS fin_pts,
           (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
         FROM dbo.oportunidades_evaluacion op_ini
+        JOIN dbo.cat_instrumentos ci ON ci.id_instrumento = op_ini.id_instrumento
         JOIN dbo.resultados_evaluacion r_ini
           ON r_ini.id_oportunidad = op_ini.id_oportunidad
          AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
@@ -434,6 +446,8 @@ export class AnalyticsService {
         JOIN dbo.programas p ON p.id_programa = op_ini.id_programa
         JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
         JOIN dbo.estudiantes e ON e.id_estudiante = op_ini.id_estudiante
+        LEFT JOIN dbo.eventos_indice ev ON ev.id_evento_indice = op_ini.id_evento_indice
+        LEFT JOIN dbo.cat_categorias_evento_indice ce ON ce.id_categoria_evento = ev.id_categoria_evento
         WHERE op_ini.momento = N'INICIAL'
           AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
           AND (@semestre IS NULL OR p.periodo_academico = @semestre)
@@ -443,10 +457,12 @@ export class AnalyticsService {
           AND (@grupoEtario IS NULL OR e.grupo_etario = @grupoEtario)
           AND (@sexo IS NULL OR e.sexo_codificado = @sexo)
           AND (@instrumento IS NULL OR op_ini.codigo_instrumento = @instrumento)
+          AND (@categoriaEvento IS NULL OR ce.codigo_categoria = @categoriaEvento)
       ),
       agrupado AS (
         SELECT
           codigo_instrumento,
+          MAX(version_instrumento) AS version_instrumento,
           ${dimSelect},
           COUNT(*) AS pares_validos,
           CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
@@ -561,6 +577,7 @@ export class AnalyticsService {
           cp.codigo_practica,
           cp.nombre_practica,
           cp.descripcion,
+          cp.es_mixto,
           r_ini.puntaje_total AS ini_pts,
           r_fin.puntaje_total AS fin_pts,
           (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
@@ -592,7 +609,7 @@ export class AnalyticsService {
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
       )
       SELECT
-        id_practica, codigo_practica, nombre_practica, descripcion,
+        id_practica, codigo_practica, nombre_practica, descripcion, es_mixto,
         COUNT(*) AS pares_validos,
         CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
         CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
@@ -601,7 +618,7 @@ export class AnalyticsService {
         SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
         SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
       FROM pares
-      GROUP BY id_practica, codigo_practica, nombre_practica, descripcion
+      GROUP BY id_practica, codigo_practica, nombre_practica, descripcion, es_mixto
       ORDER BY reduccion_promedio DESC
       `,
       params,
@@ -952,7 +969,9 @@ export class AnalyticsService {
     corte: string;
     semestre?: string;
     idPrograma?: number;
+    facultad?: string;
     instrumento?: 'PSS-10' | 'PCL-5';
+    categoriaEvento?: string;
     estado?: string;
     buscar?: string;
     page?: number;
@@ -966,7 +985,9 @@ export class AnalyticsService {
       corte: f.corte,
       semestre: f.semestre ?? null,
       idPrograma: f.idPrograma ?? null,
+      facultad: f.facultad ?? null,
       instrumento: f.instrumento ?? null,
+      categoriaEvento: f.categoriaEvento ?? null,
       estado: f.estado ?? null,
       buscar: f.buscar ? `%${f.buscar}%` : null,
       offset,
@@ -1052,7 +1073,9 @@ export class AnalyticsService {
           AND op.fecha_ventana_inicio <= CAST(@corte AS DATE)
           AND (@semestre IS NULL OR p.periodo_academico = @semestre)
           AND (@idPrograma IS NULL OR op.id_programa = @idPrograma)
+          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
           AND (@instrumento IS NULL OR op.codigo_instrumento = @instrumento)
+          AND (@categoriaEvento IS NULL OR ce.codigo_categoria = @categoriaEvento)
           AND (@buscar IS NULL OR e.codigo_anonimizado LIKE @buscar OR e.facultad_o_area LIKE @buscar)
       ),
       filtrado AS (

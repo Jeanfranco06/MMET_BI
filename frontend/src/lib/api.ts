@@ -54,6 +54,11 @@ export interface FiltrosResponse {
   ciclos?: number[];
   gruposEtarios: string[];
   sexos: string[];
+  categoriasEvento?: Array<{
+    id_categoria_evento: number;
+    codigo_categoria: string;
+    nombre_categoria: string;
+  }>;
   semestres: string[];
   rangoFechas: { fecha_min: string; fecha_max: string };
 }
@@ -132,6 +137,7 @@ export const api = {
     grupo_etario?: string;
     sexo?: string;
     instrumento?: 'PSS-10' | 'PCL-5' | '';
+    categoria_evento?: string;
     agrupar_por?: 'programa' | 'facultad' | 'grupo_etario';
     page?: number;
     pageSize?: number;
@@ -158,7 +164,9 @@ export const api = {
     corte: string;
     semestre?: string;
     id_programa?: string;
+    facultad?: string;
     instrumento?: string;
+    categoria_evento?: string;
     estado?: string;
     buscar?: string;
     page?: number;

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Info, X } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
-import { SemaforoBadge } from './SemaforoBadge';
 
 interface EvolucionReportProps {
   filtros: FiltrosResponse | null;
@@ -32,6 +31,7 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
   const [grupoEtario, setGrupoEtario] = useState('');
   const [sexo, setSexo] = useState('');
   const [instrumento, setInstrumento] = useState<'' | 'PSS-10' | 'PCL-5'>('');
+  const [categoriaEvento, setCategoriaEvento] = useState('');
   const [agruparPor, setAgruparPor] = useState<'programa' | 'facultad' | 'grupo_etario'>('programa');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -59,6 +59,7 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         grupo_etario: grupoEtario || undefined,
         sexo: sexo || undefined,
         instrumento: instrumento || undefined,
+        categoria_evento: categoriaEvento || undefined,
         agrupar_por: agruparPor,
         page,
         pageSize,
@@ -69,7 +70,20 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     } finally {
       setLoading(false);
     }
-  }, [corte, semestre, facultad, idPrograma, idPractica, grupoEtario, sexo, instrumento, agruparPor, page, pageSize]);
+  }, [
+    corte,
+    semestre,
+    facultad,
+    idPrograma,
+    idPractica,
+    grupoEtario,
+    sexo,
+    instrumento,
+    categoriaEvento,
+    agruparPor,
+    page,
+    pageSize,
+  ]);
 
   useEffect(() => {
     cargar();
@@ -82,12 +96,20 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     setGrupoEtario('');
     setSexo('');
     setInstrumento('');
+    setCategoriaEvento('');
     setAgruparPor('programa');
     setPage(1);
   };
 
   const hayFiltrosActivos = Boolean(
-    facultad || idPractica || idPrograma || grupoEtario || sexo || instrumento || agruparPor !== 'programa',
+    facultad ||
+      idPractica ||
+      idPrograma ||
+      grupoEtario ||
+      sexo ||
+      instrumento ||
+      categoriaEvento ||
+      agruparPor !== 'programa',
   );
 
   const programasFiltrados = (filtros?.programas || []).filter(
@@ -152,8 +174,8 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
               className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
             >
               <option value="">Ambos (separados)</option>
-              <option value="PSS-10">PSS-10 · Estrés percibido (KPI-01)</option>
-              <option value="PCL-5">PCL-5 · Síntomas postraumáticos (KPI-02)</option>
+              <option value="PSS-10">PSS-10 · Estrés percibido (0–40 pts)</option>
+              <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80 pts)</option>
             </select>
           </label>
 
@@ -267,6 +289,25 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
               ))}
             </select>
           </label>
+
+          <label className="block sm:col-span-2 lg:col-span-2">
+            <span className="block text-xs font-medium text-slate-600 mb-1">Evento índice (PCL-5)</span>
+            <select
+              value={categoriaEvento}
+              onChange={(e) => {
+                setCategoriaEvento(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
+            >
+              <option value="">Todos los eventos</option>
+              {(filtros?.categoriasEvento || []).map((c) => (
+                <option key={c.codigo_categoria} value={c.codigo_categoria}>
+                  {c.codigo_categoria} · {c.nombre_categoria}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
         {hayFiltrosActivos && (
@@ -331,19 +372,18 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
                   <th scope="col">Disminuyeron</th>
                   <th scope="col">Sin cambio</th>
                   <th scope="col">Aumentaron</th>
-                  <th scope="col">Estado</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && !data ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-10 text-slate-500">
+                    <td colSpan={9} className="text-center py-10 text-slate-500">
                       Consultando pares válidos en SQL Server...
                     </td>
                   </tr>
                 ) : !data?.filas?.length ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-10 text-slate-500">
+                    <td colSpan={9} className="text-center py-10 text-slate-500">
                       No se encontraron pares válidos para los filtros seleccionados.
                     </td>
                   </tr>
@@ -360,14 +400,27 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
                         >
                           {r.codigo_instrumento}
                         </span>
+                        {r.version_instrumento && (
+                          <div className="text-[11px] font-normal text-slate-500 mt-0.5">
+                            {r.version_instrumento}
+                          </div>
+                        )}
                       </th>
                       <td data-label={etiquetaDimension}>
                         <div className="font-semibold text-slate-900">
                           {agruparPor === 'programa' ? compactPrograma(r.dim_clave) : r.dim_clave}
                         </div>
-                        {agruparPor === 'programa' && r.dim_subtitulo && (
-                          <div className="text-[11px] text-slate-500 truncate max-w-[190px] mx-auto" title={r.dim_subtitulo}>
+                        {agruparPor === 'programa' && (r.dim_subtitulo || r.estado_programa) && (
+                          <div
+                            className="text-[11px] text-slate-500 truncate max-w-[210px] mx-auto"
+                            title={
+                              r.estado_programa
+                                ? `${r.dim_subtitulo} · ${r.estado_programa}`
+                                : r.dim_subtitulo
+                            }
+                          >
                             {r.dim_subtitulo}
+                            {r.estado_programa ? ` · ${r.estado_programa}` : ''}
                           </div>
                         )}
                       </td>
@@ -401,9 +454,6 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
                       <td data-label="Aumentaron" className="tabular-nums text-rose-700">
                         {r.suprimido ? '—' : r.aumentaron ?? '—'}
                       </td>
-                      <td data-label="Estado">
-                        <SemaforoBadge estado={r.semaforo} />
-                      </td>
                     </tr>
                   ))
                 )}
@@ -425,11 +475,11 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
                           TOTAL {t.codigo_instrumento}
                         </div>
                         <div className="text-[11px] font-medium text-slate-600">
-                          {t.codigo_instrumento === 'PSS-10' ? 'KPI-01 (0–40)' : 'KPI-02 (0–80)'}
+                          {t.codigo_instrumento === 'PSS-10' ? 'Escala 0–40 pts' : 'Escala 0–80 pts'}
                         </div>
                       </th>
-                      <td data-label={etiquetaDimension} className="text-slate-600 font-medium">
-                        Meta {t.meta_operativa}
+                      <td data-label={etiquetaDimension} className="text-slate-400">
+                        —
                       </td>
                       <td data-label="Pares válidos (n)" className="tabular-nums font-bold">
                         {t.pares_validos.toLocaleString()}
@@ -455,9 +505,6 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
                       </td>
                       <td data-label="Aumentaron" className="tabular-nums font-bold text-rose-800">
                         {t.suprimido ? '—' : t.aumentaron?.toLocaleString() ?? '—'}
-                      </td>
-                      <td data-label="Estado">
-                        <SemaforoBadge estado={t.semaforo} />
                       </td>
                     </tr>
                   ))}
@@ -514,15 +561,15 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         )}
       </section>
 
-      {/* Leyenda y fórmulas DEBAJO del listado */}
+      {/* Leyenda y reglas operacionales DEBAJO del listado */}
       <section aria-label="Leyenda de instrumentos y reglas de cómputo" className="space-y-3 pt-1">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-teal-600 mt-1.5 shrink-0" aria-hidden="true" />
             <div>
-              <div className="text-xs font-semibold text-slate-900">KPI-01 · PSS-10 (0–40 pts)</div>
+              <div className="text-xs font-semibold text-slate-900">PSS-10 · Estrés percibido (0–40 pts)</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Bueno: reducción ≥ 4 pts · Regular: 0 a &lt; 4 pts · Malo: &lt; 0 pts.
+                Escala de 10 ítems aplicada al inicio y cierre del programa sobre pares válidos en ventana.
               </p>
             </div>
           </div>
@@ -530,9 +577,9 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
           <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-sky-600 mt-1.5 shrink-0" aria-hidden="true" />
             <div>
-              <div className="text-xs font-semibold text-slate-900">KPI-02 · PCL-5 (0–80 pts)</div>
+              <div className="text-xs font-semibold text-slate-900">PCL-5 · Síntomas postraumáticos (0–80 pts)</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Bueno: reducción ≥ 10 pts · Regular: 0 a &lt; 10 pts · Malo: &lt; 0 pts. Exige mismo evento índice.
+                Escala de 20 ítems; exige que la evaluación inicial y final correspondan al mismo evento índice.
               </p>
             </div>
           </div>
@@ -551,12 +598,12 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         <details className="bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-600">
           <summary className="cursor-pointer font-medium text-slate-700 inline-flex items-center gap-1.5 select-none">
             <Info className="w-3.5 h-3.5 text-teal-700" aria-hidden="true" />
-            Ver fórmulas y reglas de cómputo aplicadas
+            Ver reglas de cómputo aplicadas
           </summary>
           <div className="mt-2.5 pt-2.5 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3 leading-relaxed">
             <div>
-              <strong className="text-slate-800 block">Reducción promedio (pts)</strong>
-              <code>Σ(PuntajeInicial − PuntajeFinal) ÷ ParesVálidos</code>. Un valor positivo indica disminución de síntomas.
+              <strong className="text-slate-800 block">Diferencia pareada (pts)</strong>
+              <code>PuntajeInicial − PuntajeFinal</code>. Un valor positivo indica disminución de síntomas respecto a la evaluación inicial.
             </div>
             <div>
               <strong className="text-slate-800 block">Criterio de par válido</strong>

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Calendar, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
-import { SemaforoBadge } from './SemaforoBadge';
 
 interface EfectividadPracticaReportProps {
   filtros: FiltrosResponse | null;
@@ -96,6 +95,7 @@ export function EfectividadPracticaReport({
   const kpi05 = data?.kpi05_meta_practicas;
   const metaPts = data?.meta_operativa_pts ?? (instrumento === 'PSS-10' ? 4 : 10);
   const filas: any[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
+  const totalParesFilas = filas.reduce((acc, r) => acc + Number(r.pares_validos || 0), 0);
 
   return (
     <div className="space-y-5">
@@ -103,11 +103,11 @@ export function EfectividadPracticaReport({
       <section className="bg-white rounded-xl border border-slate-200 p-5">
         <div>
           <h2 className="text-xl font-bold text-slate-900">
-            Comparativo de Efectividad y Cumplimiento de Meta por Práctica (KPI-05)
+            Comparativo de Efectividad y Cumplimiento de Meta por Práctica
           </h2>
           <p className="text-sm text-slate-500 mt-1">
             Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Instrumento:{' '}
-            <strong className="text-slate-700">{instrumento}</strong> · Meta operativa:{' '}
+            <strong className="text-slate-700">{instrumento}</strong> · Referencia operativa:{' '}
             <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte:{' '}
             <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
           </p>
@@ -137,8 +137,8 @@ export function EfectividadPracticaReport({
               onChange={(e) => setInstrumento(e.target.value as 'PSS-10' | 'PCL-5')}
               className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
             >
-              <option value="PSS-10">PSS-10 · Estrés percibido (Meta ≥ 4.0 pts)</option>
-              <option value="PCL-5">PCL-5 · Síntomas postraumáticos (Meta ≥ 10.0 pts)</option>
+              <option value="PSS-10">PSS-10 · Estrés percibido (0–40 pts)</option>
+              <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80 pts)</option>
             </select>
           </label>
 
@@ -232,19 +232,18 @@ export function EfectividadPracticaReport({
                   <th scope="col">Reducción (pts)</th>
                   <th scope="col">Meta operativa</th>
                   <th scope="col">Cumplimiento de meta</th>
-                  <th scope="col">Semáforo</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && !data ? (
                   <tr>
-                    <td colSpan={vista === 'programa' ? 9 : 8} className="text-center py-10 text-slate-500">
+                    <td colSpan={vista === 'programa' ? 8 : 7} className="text-center py-10 text-slate-500">
                       Consultando resultados por práctica en SQL Server...
                     </td>
                   </tr>
                 ) : !filas.length ? (
                   <tr>
-                    <td colSpan={vista === 'programa' ? 9 : 8} className="text-center py-10 text-slate-500">
+                    <td colSpan={vista === 'programa' ? 8 : 7} className="text-center py-10 text-slate-500">
                       No se encontraron registros para los filtros seleccionados.
                     </td>
                   </tr>
@@ -255,7 +254,12 @@ export function EfectividadPracticaReport({
                         {vista === 'practica' ? (
                           <div>
                             <div className="font-semibold text-slate-900">{r.codigo_practica}</div>
-                            <div className="text-[11px] font-normal text-slate-500">{r.nombre_practica}</div>
+                            <div className="text-[11px] font-normal text-slate-500">
+                              {r.nombre_practica}
+                              {r.es_mixto !== undefined && (
+                                <> · {r.es_mixto ? 'Mixto' : 'Unicomponente'}</>
+                              )}
+                            </div>
                           </div>
                         ) : (
                           <div>
@@ -298,9 +302,6 @@ export function EfectividadPracticaReport({
                       <td data-label="Cumplimiento de meta">
                         <CumpleMetaBadge cumple={r.cumple_meta} suprimido={r.suprimido} />
                       </td>
-                      <td data-label="Semáforo">
-                        <SemaforoBadge estado={r.semaforo} />
-                      </td>
                     </tr>
                   ))
                 )}
@@ -310,26 +311,26 @@ export function EfectividadPracticaReport({
                 <tfoot>
                   <tr className="bg-teal-50/75 font-semibold text-slate-900 text-xs">
                     <th scope="row" className="bg-teal-50/90 whitespace-nowrap">
-                      <div className="font-bold text-slate-900">KPI-05 · CUMPLIMIENTO DE META</div>
+                      <div className="font-bold text-slate-900">TOTAL GENERAL</div>
                       <div className="text-[11px] font-medium text-teal-800">Instrumento {instrumento}</div>
                     </th>
-                    {vista === 'programa' && <td className="text-slate-500">—</td>}
+                    {vista === 'programa' && <td className="text-slate-400">—</td>}
                     <td data-label="Pares válidos (n)" className="tabular-nums font-bold">
-                      {kpi05.practicas_evaluables} prácticas evaluables
+                      {totalParesFilas.toLocaleString()}
                     </td>
                     <td className="text-slate-400">—</td>
                     <td className="text-slate-400">—</td>
-                    <td data-label="Reducción (pts)" className="tabular-nums font-bold text-emerald-800">
-                      {kpi05.practicas_cumplen_meta} de {kpi05.practicas_evaluables} cumplen
-                    </td>
+                    <td className="text-slate-400">—</td>
                     <td data-label="Meta operativa" className="tabular-nums font-bold text-slate-700">
-                      Meta {kpi05.meta_operativa}
+                      ≥ {metaPts.toFixed(1)} pts
                     </td>
-                    <td data-label="Cumplimiento de meta" className="tabular-nums font-bold text-teal-900 text-sm">
-                      {kpi05.tasa_cumplimiento_meta != null ? `${kpi05.tasa_cumplimiento_meta.toFixed(1)}%` : '—'}
-                    </td>
-                    <td data-label="Semáforo">
-                      <SemaforoBadge estado={kpi05.semaforo} />
+                    <td data-label="Cumplimiento de meta" className="whitespace-nowrap">
+                      <div className="font-bold text-emerald-800">
+                        {kpi05.practicas_cumplen_meta} cumplen meta
+                      </div>
+                      <div className="text-[11px] font-medium text-slate-600">
+                        {kpi05.practicas_evaluables} prácticas evaluables
+                      </div>
                     </td>
                   </tr>
                 </tfoot>
@@ -339,25 +340,15 @@ export function EfectividadPracticaReport({
         </div>
       </section>
 
-      {/* Leyenda y fórmulas DEBAJO del listado */}
-      <section aria-label="Leyenda de KPI-05 y fórmulas de cálculo" className="space-y-3 pt-1">
+      {/* Leyenda y reglas operacionales DEBAJO del listado */}
+      <section aria-label="Leyenda de estados de cumplimiento y reglas de cómputo" className="space-y-3 pt-1">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 mt-1.5 shrink-0" aria-hidden="true" />
             <div>
-              <div className="text-xs font-semibold text-slate-900">Bueno (≥ 80%)</div>
+              <div className="text-xs font-semibold text-slate-900">Cumple meta</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Al menos 4 de 5 prácticas evaluables alcanzan la meta operativa del instrumento.
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 mt-1.5 shrink-0" aria-hidden="true" />
-            <div>
-              <div className="text-xs font-semibold text-slate-900">Regular (60% a &lt; 80%)</div>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                3 de 5 prácticas evaluables cumplen la meta; las restantes requieren revisión metodológica.
+                Práctica evaluable cuya reducción promedio alcanza o supera la meta operativa del instrumento.
               </p>
             </div>
           </div>
@@ -365,9 +356,19 @@ export function EfectividadPracticaReport({
           <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-600 mt-1.5 shrink-0" aria-hidden="true" />
             <div>
-              <div className="text-xs font-semibold text-slate-900">Malo (&lt; 60%)</div>
+              <div className="text-xs font-semibold text-slate-900">No cumple</div>
               <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Menos de 3 prácticas alcanzan la reducción objetivo en el corte seleccionado.
+                Práctica evaluable cuya reducción promedio se ubica por debajo de la meta operativa al corte.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-500 mt-1.5 shrink-0" aria-hidden="true" />
+            <div>
+              <div className="text-xs font-semibold text-slate-900">No evaluable (n &lt; 5)</div>
+              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                Muestra inferior a 5 pares válidos; los promedios se suprimen por privacidad estadística.
               </p>
             </div>
           </div>
@@ -376,20 +377,20 @@ export function EfectividadPracticaReport({
         <details className="bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-600">
           <summary className="cursor-pointer font-medium text-slate-700 inline-flex items-center gap-1.5 select-none">
             <Info className="w-3.5 h-3.5 text-teal-700" aria-hidden="true" />
-            Ver fórmulas y reglas de cómputo aplicadas
+            Ver reglas de cómputo aplicadas
           </summary>
           <div className="mt-2.5 pt-2.5 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3 leading-relaxed">
             <div>
-              <strong className="text-slate-800 block">KPI-05 (%)</strong>
-              <code>PrácticasQueCumplenMeta ÷ PrácticasEvaluables × 100</code>. Calculado por separado para PSS-10 y PCL-5.
+              <strong className="text-slate-800 block">Separación de escalas</strong>
+              PSS-10 y PCL-5 se analizan siempre de forma independiente y nunca se combinan.
             </div>
             <div>
               <strong className="text-slate-800 block">Práctica evaluable</strong>
               Debe acumular al menos <strong>5 pares válidos en ventana</strong> al corte seleccionado.
             </div>
             <div>
-              <strong className="text-slate-800 block">Umbral por instrumento</strong>
-              PSS-10 exige reducción promedio <code>≥ 4.0 pts</code>; PCL-5 exige <code>≥ 10.0 pts</code> sobre el mismo evento índice.
+              <strong className="text-slate-800 block">Referencia operativa por instrumento</strong>
+              PSS-10 utiliza referencia <code>≥ 4.0 pts</code>; PCL-5 utiliza <code>≥ 10.0 pts</code> sobre el mismo evento índice.
             </div>
           </div>
         </details>
