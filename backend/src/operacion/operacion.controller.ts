@@ -1,7 +1,77 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { OperacionService } from './operacion.service';
 import { Roles } from '../auth/auth.guard';
+
+export class CrearEstudianteDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(50)
+  codigo_estudiante: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  nombres: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  apellidos: string;
+
+  @IsEmail({}, { message: 'correo_institucional debe ser un correo electrónico válido.' })
+  @MaxLength(150)
+  correo_institucional: string;
+
+  @IsInt()
+  @Min(18, { message: 'La edad mínima permitida es 18 años.' })
+  @Max(99)
+  edad_anios: number;
+
+  @IsIn(['F', 'M', 'NO_ESPECIFICADO'])
+  sexo_codificado: 'F' | 'M' | 'NO_ESPECIFICADO';
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(80)
+  facultad_o_area: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  carrera: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(14)
+  ciclo_academico: number;
+}
+
+export class CrearAsignacionDto {
+  @IsInt()
+  @Min(1)
+  id_estudiante: number;
+
+  @IsInt()
+  @Min(1)
+  id_programa: number;
+
+  @IsOptional()
+  @IsDateString()
+  fecha_inscripcion?: string;
+}
 
 export class RegistrarAsistenciaDto {
   @IsInt()
@@ -80,6 +150,34 @@ export class RegistrarResultadoDto {
 @Controller('operacion')
 export class OperacionController {
   constructor(private readonly operacionService: OperacionService) {}
+
+  @Get('estudiantes')
+  @Roles('ADMIN', 'COORDINACION')
+  getEstudiantes(
+    @Query('buscar') buscar?: string,
+    @Query('facultad') facultad?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.operacionService.getEstudiantes({
+      buscar: buscar?.trim() || undefined,
+      facultad: facultad?.trim() || undefined,
+      page: page ? Math.max(1, Number(page)) : 1,
+      pageSize: pageSize ? Math.min(100, Math.max(1, Number(pageSize))) : 15,
+    });
+  }
+
+  @Post('estudiantes')
+  @Roles('ADMIN', 'COORDINACION')
+  crearEstudiante(@Body() dto: CrearEstudianteDto) {
+    return this.operacionService.crearEstudiante(dto);
+  }
+
+  @Post('asignaciones')
+  @Roles('ADMIN', 'COORDINACION')
+  crearAsignacion(@Body() dto: CrearAsignacionDto) {
+    return this.operacionService.crearAsignacion(dto);
+  }
 
   @Get('sesiones')
   @Roles('ADMIN', 'COORDINACION', 'EVALUACION')

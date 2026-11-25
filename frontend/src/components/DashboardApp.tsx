@@ -11,6 +11,7 @@ import {
   DatabaseZap,
   Edit3,
   Filter,
+  GraduationCap,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -42,6 +43,7 @@ type SeccionId =
   | 'practicas'
   | 'continuidad'
   | 'cumplimiento'
+  | 'oltp-estudiantes'
   | 'oltp-asistencias'
   | 'oltp-sesiones'
   | 'oltp-correcciones'
@@ -108,6 +110,15 @@ const NAV_ITEMS: NavItem[] = [
     Icon: ClipboardCheck,
   },
   {
+    id: 'oltp-estudiantes',
+    label: 'Estudiantes e Inscripciones',
+    shortLabel: 'Estudiantes',
+    subtitle: 'Padrón y matrícula dbo.estudiantes',
+    section: 'Operación Transaccional (OLTP)',
+    Icon: GraduationCap,
+    allowedRoles: ['ADMIN', 'COORDINACION'],
+  },
+  {
     id: 'oltp-asistencias',
     label: 'Asistencias',
     shortLabel: 'Asistencias',
@@ -155,6 +166,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const SECCION_TO_OP_TAB: Partial<Record<SeccionId, OpTab>> = {
+  'oltp-estudiantes': 'estudiantes',
   'oltp-asistencias': 'asistencias',
   'oltp-sesiones': 'sesiones',
   'oltp-correcciones': 'correcciones',

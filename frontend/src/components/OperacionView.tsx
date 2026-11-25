@@ -3,22 +3,26 @@
 import { useEffect, useState } from 'react';
 import {
   AlertCircle,
+  BookOpen,
   Calendar,
   CalendarPlus,
   CheckCircle2,
   ClipboardCheck,
   DatabaseZap,
   Edit3,
+  GraduationCap,
   RefreshCw,
+  Search,
   UserCheck,
+  UserPlus,
   X,
 } from 'lucide-react';
-import { api, type FiltrosResponse } from '@/lib/api';
+import { api, type EstudianteOltpRow, type FiltrosResponse } from '@/lib/api';
 import { ResponsiveTable, type TableColumn } from './ResponsiveTable';
 import { ModalDialog } from './ModalDialog';
 import { TableSkeleton } from './UiStates';
 
-export type OpTab = 'asistencias' | 'sesiones' | 'correcciones' | 'etl';
+export type OpTab = 'estudiantes' | 'asistencias' | 'sesiones' | 'correcciones' | 'etl';
 
 interface OperacionViewProps {
   activeTab: OpTab;
@@ -36,6 +40,13 @@ const TAB_HEADER_META: Record<
     description: string;
   }
 > = {
+  estudiantes: {
+    layer: 'OLTP',
+    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    title: 'Estudiantes e Inscripciones',
+    description:
+      'Padrón universitario (dbo.estudiantes) y matrícula en uno o múltiples programas (dbo.asignaciones) con generación automática de oportunidades PSS-10.',
+  },
   asistencias: {
     layer: 'OLTP',
     layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
@@ -84,6 +95,34 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     const t = setTimeout(() => setToast(null), 5500);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // 0. Estudiantes e Inscripciones (RQ-BI-01)
+  const [estudiantes, setEstudiantes] = useState<EstudianteOltpRow[]>([]);
+  const [estPaginacion, setEstPaginacion] = useState({ page: 1, pageSize: 15, totalRegistros: 0, totalPaginas: 1 });
+  const [estBuscar, setEstBuscar] = useState('');
+  const [estFacultad, setEstFacultad] = useState('');
+  const [estPage, setEstPage] = useState(1);
+  const [estLoading, setEstLoading] = useState(false);
+
+  // Modal: Registrar Estudiante
+  const [estModalOpen, setEstModalOpen] = useState(false);
+  const [neCodigo, setNeCodigo] = useState('');
+  const [neNombres, setNeNombres] = useState('');
+  const [neApellidos, setNeApellidos] = useState('');
+  const [neCorreo, setNeCorreo] = useState('');
+  const [neEdad, setNeEdad] = useState('20');
+  const [neSexo, setNeSexo] = useState<'F' | 'M' | 'NO_ESPECIFICADO'>('F');
+  const [neFacultad, setNeFacultad] = useState('Ingeniería');
+  const [neCarrera, setNeCarrera] = useState('Ingeniería de Sistemas');
+  const [neCiclo, setNeCiclo] = useState('5');
+  const [neBusy, setNeBusy] = useState(false);
+
+  // Modal: Inscribir en Programa
+  const [asigModalOpen, setAsigModalOpen] = useState(false);
+  const [naEstudianteId, setNaEstudianteId] = useState('');
+  const [naProgramaId, setNaProgramaId] = useState('');
+  const [naFecha, setNaFecha] = useState('2026-11-25');
+  const [naBusy, setNaBusy] = useState(false);
 
   // 1. Asistencia form
   const [asisSesionId, setAsisSesionId] = useState<string>('');
@@ -141,10 +180,94 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     }
   };
 
+  const cargarEstudiantes = async (pageToLoad = estPage) => {
+    if (!canManageSessions) return;
+    setEstLoading(true);
+    try {
+      const res = await api.getEstudiantes({
+        buscar: estBuscar.trim() || undefined,
+        facultad: estFacultad || undefined,
+        page: pageToLoad,
+        pageSize: 15,
+      });
+      setEstudiantes(res.estudiantes);
+      setEstPaginacion(res.paginacion);
+    } catch (e: any) {
+      showToast('error', e.message || 'Error al cargar el padrón de estudiantes.');
+    } finally {
+      setEstLoading(false);
+    }
+  };
+
   useEffect(() => {
     cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idPrograma]);
+
+  useEffect(() => {
+    if (activeTab === 'estudiantes' && canManageSessions) {
+      cargarEstudiantes(estPage);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, estPage, estFacultad]);
+
+  const handleCrearEstudiante = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNeBusy(true);
+    try {
+      const res = await api.crearEstudiante({
+        codigo_estudiante: neCodigo.trim(),
+        nombres: neNombres.trim(),
+        apellidos: neApellidos.trim(),
+        correo_institucional: neCorreo.trim(),
+        edad_anios: Number(neEdad),
+        sexo_codificado: neSexo,
+        facultad_o_area: neFacultad.trim(),
+        carrera: neCarrera.trim(),
+        ciclo_academico: Number(neCiclo),
+      });
+      showToast('success', res.mensaje);
+      setEstModalOpen(false);
+      setNeCodigo('');
+      setNeNombres('');
+      setNeApellidos('');
+      setNeCorreo('');
+      setEstPage(1);
+      await cargarEstudiantes(1);
+      onDataMutated();
+    } catch (err: any) {
+      showToast('error', err.message);
+    } finally {
+      setNeBusy(false);
+    }
+  };
+
+  const openInscribirModal = (est?: EstudianteOltpRow) => {
+    setNaEstudianteId(est ? String(est.id_estudiante) : String(estudiantes[0]?.id_estudiante || ''));
+    const activeProg = filtros?.programas.find((p) => p.estado_programa === 'ACTIVO') || filtros?.programas[0];
+    setNaProgramaId(String(activeProg?.id_programa || ''));
+    setAsigModalOpen(true);
+  };
+
+  const handleCrearAsignacion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNaBusy(true);
+    try {
+      const res = await api.crearAsignacion({
+        id_estudiante: Number(naEstudianteId),
+        id_programa: Number(naProgramaId),
+        fecha_inscripcion: naFecha || undefined,
+      });
+      showToast('success', res.mensaje);
+      setAsigModalOpen(false);
+      await cargarEstudiantes(estPage);
+      onDataMutated();
+    } catch (err: any) {
+      showToast('error', err.message);
+    } finally {
+      setNaBusy(false);
+    }
+  };
 
   const handleRegistrarAsistencia = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -313,6 +436,82 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
       : []),
   ];
 
+  const estCols: TableColumn<EstudianteOltpRow>[] = [
+    {
+      key: 'cod',
+      header: 'Código',
+      isRowHeader: true,
+      render: (r) => <span className="font-mono font-bold text-slate-900 text-xs">{r.codigo_estudiante}</span>,
+    },
+    {
+      key: 'nom',
+      header: 'Nombres y Apellidos',
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="font-semibold text-slate-900 text-xs">
+            {r.apellidos}, {r.nombres}
+          </div>
+          <div className="text-[11px] text-slate-500 truncate">{r.correo_institucional}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'fac',
+      header: 'Facultad / Carrera',
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-slate-800">{r.facultad_o_area}</div>
+          <div className="text-[11px] text-slate-500">{r.carrera}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'ciclo',
+      header: 'Ciclo / Edad',
+      render: (r) => (
+        <span className="text-xs text-slate-700">
+          Ciclo {r.ciclo_academico} · {r.edad_anios} años
+        </span>
+      ),
+    },
+    {
+      key: 'progs',
+      header: 'Programas inscritos',
+      render: (r) => (
+        <div className="space-y-1">
+          <span
+            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
+              r.programas_inscritos > 0
+                ? 'bg-teal-50 text-teal-800 border-teal-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200'
+            }`}
+          >
+            {r.programas_inscritos} programa(s)
+          </span>
+          {r.programas_codigos.length > 0 && (
+            <div className="text-[10px] font-mono text-slate-500 max-w-[220px] truncate" title={r.programas_codigos.join(', ')}>
+              {r.programas_codigos.join(', ')}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'acc',
+      header: 'Matrícula',
+      render: (r) => (
+        <button
+          type="button"
+          onClick={() => openInscribirModal(r)}
+          className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 transition-colors"
+        >
+          <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+          Inscribir
+        </button>
+      ),
+    },
+  ];
+
   const sesCols: TableColumn<any>[] = [
     { key: 'prog', header: 'Programa', isRowHeader: true, render: (r) => r.codigo_programa },
     { key: 'num', header: 'Sesión #', render: (r) => `#${r.numero_sesion}` },
@@ -394,7 +593,41 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
               {headerMeta.description}
             </p>
           </div>
-          {!isEtlLayer && (
+          {!isEtlLayer && activeTab === 'estudiantes' && canManageSessions && (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setNeFacultad(filtros?.facultades?.[0] || 'Ingeniería');
+                  setEstModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition-colors"
+              >
+                <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                Registrar Estudiante
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openInscribirModal()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition-colors"
+              >
+                <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                Inscribir en Programa
+              </button>
+
+              <button
+                type="button"
+                onClick={() => cargarEstudiantes(estPage)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${estLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                Actualizar
+              </button>
+            </div>
+          )}
+
+          {!isEtlLayer && activeTab !== 'estudiantes' && (
             <div className="flex flex-wrap items-center gap-2.5">
               <select
                 aria-label="Filtrar por programa"
@@ -437,6 +670,109 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
           )}
         </div>
       </section>
+
+      {/* TAB 0: ESTUDIANTES E INSCRIPCIONES (RQ-BI-01) */}
+      {activeTab === 'estudiantes' && canManageSessions && (
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-700 border border-teal-200/80 flex items-center justify-center">
+                <GraduationCap className="w-4 h-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="font-display text-sm font-bold text-slate-900">
+                  Padrón de Estudiantes ({estPaginacion.totalRegistros.toLocaleString('es-PE')})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Datos completos de <code>dbo.estudiantes</code> y programas matriculados en <code>dbo.asignaciones</code>.
+                </p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setEstPage(1);
+                cargarEstudiantes(1);
+              }}
+              className="flex flex-wrap items-center gap-2"
+            >
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="search"
+                  placeholder="Buscar código, nombre, correo…"
+                  value={estBuscar}
+                  onChange={(e) => setEstBuscar(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 py-1.5 text-xs text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-none w-56"
+                />
+              </div>
+
+              <select
+                aria-label="Filtrar por facultad"
+                value={estFacultad}
+                onChange={(e) => {
+                  setEstFacultad(e.target.value);
+                  setEstPage(1);
+                }}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700"
+              >
+                <option value="">Todas las facultades</option>
+                {(filtros?.facultades || []).map((fac) => (
+                  <option key={fac} value={fac}>
+                    {fac}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="submit"
+                className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-700 transition-colors"
+              >
+                Buscar
+              </button>
+            </form>
+          </div>
+
+          {estLoading ? (
+            <TableSkeleton rows={8} />
+          ) : (
+            <>
+              <ResponsiveTable
+                caption="Padrón de estudiantes registrados en dbo.estudiantes"
+                columns={estCols}
+                rows={estudiantes}
+                rowKey={(r) => r.id_estudiante}
+              />
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs text-slate-600">
+                <span>
+                  Página <strong>{estPaginacion.page}</strong> de <strong>{estPaginacion.totalPaginas}</strong> ·{' '}
+                  {estPaginacion.totalRegistros.toLocaleString('es-PE')} registros
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={estPaginacion.page <= 1}
+                    onClick={() => setEstPage((p) => Math.max(1, p - 1))}
+                    className="rounded-lg border border-slate-200 px-3 py-1 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+                  <button
+                    type="button"
+                    disabled={estPaginacion.page >= estPaginacion.totalPaginas}
+                    onClick={() => setEstPage((p) => Math.min(estPaginacion.totalPaginas, p + 1))}
+                    className="rounded-lg border border-slate-200 px-3 py-1 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       {/* TAB 1: ASISTENCIAS */}
       {activeTab === 'asistencias' && canManageSessions && (
@@ -763,6 +1099,249 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
               className="rounded-xl bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
             >
               {nsBusy ? 'Guardando…' : 'Guardar sesión'}
+            </button>
+          </div>
+        </form>
+      </ModalDialog>
+
+      {/* Modal: Registrar Estudiante (RQ-BI-01) */}
+      <ModalDialog
+        open={estModalOpen}
+        onClose={() => setEstModalOpen(false)}
+        title="Registrar Estudiante"
+        subtitle="Inserta un nuevo registro universitario en dbo.estudiantes (edad >= 18, ciclo 1–14)."
+      >
+        <form onSubmit={handleCrearEstudiante} className="space-y-3 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Código de estudiante</span>
+              <input
+                type="text"
+                required
+                minLength={3}
+                maxLength={50}
+                placeholder="Ej. UNT26-EST-1001"
+                value={neCodigo}
+                onChange={(e) => setNeCodigo(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-mono"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Correo institucional</span>
+              <input
+                type="email"
+                required
+                maxLength={150}
+                placeholder="Ej. est1001@unitru.edu.pe"
+                value={neCorreo}
+                onChange={(e) => setNeCorreo(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Nombres</span>
+              <input
+                type="text"
+                required
+                minLength={2}
+                maxLength={100}
+                placeholder="Ej. Valeria Sofía"
+                value={neNombres}
+                onChange={(e) => setNeNombres(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Apellidos</span>
+              <input
+                type="text"
+                required
+                minLength={2}
+                maxLength={100}
+                placeholder="Ej. Paredes Mendoza"
+                value={neApellidos}
+                onChange={(e) => setNeApellidos(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Facultad o área</span>
+              <select
+                required
+                value={neFacultad}
+                onChange={(e) => setNeFacultad(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+              >
+                {(
+                  filtros?.facultades?.length
+                    ? filtros.facultades
+                    : [
+                        'Ingeniería',
+                        'Ciencias Médicas',
+                        'Ciencias Sociales',
+                        'Educación y Ciencias de la Comunicación',
+                        'Derecho y Ciencias Políticas',
+                        'Ciencias Económicas',
+                        'Ciencias Biológicas',
+                        'Farmacia y Bioquímica',
+                      ]
+                ).map((fac) => (
+                  <option key={fac} value={fac}>
+                    {fac}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Carrera / Escuela profesional</span>
+              <input
+                type="text"
+                required
+                minLength={2}
+                maxLength={120}
+                placeholder="Ej. Ingeniería de Sistemas"
+                value={neCarrera}
+                onChange={(e) => setNeCarrera(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Edad (18–99)</span>
+              <input
+                type="number"
+                required
+                min={18}
+                max={99}
+                value={neEdad}
+                onChange={(e) => setNeEdad(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Ciclo (1–14)</span>
+              <input
+                type="number"
+                required
+                min={1}
+                max={14}
+                value={neCiclo}
+                onChange={(e) => setNeCiclo(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Sexo</span>
+              <select
+                value={neSexo}
+                onChange={(e) => setNeSexo(e.target.value as 'F' | 'M' | 'NO_ESPECIFICADO')}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+              >
+                <option value="F">F</option>
+                <option value="M">M</option>
+                <option value="NO_ESPECIFICADO">No especificado</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setEstModalOpen(false)}
+              className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={neBusy}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+            >
+              {neBusy ? 'Registrando…' : 'Registrar estudiante'}
+            </button>
+          </div>
+        </form>
+      </ModalDialog>
+
+      {/* Modal: Inscribir en Programa (RQ-BI-01) */}
+      <ModalDialog
+        open={asigModalOpen}
+        onClose={() => setAsigModalOpen(false)}
+        title="Inscribir Estudiante en Programa"
+        subtitle="Registra matrícula en dbo.asignaciones (permite múltiples programas por estudiante)."
+      >
+        <form onSubmit={handleCrearAsignacion} className="space-y-3 text-sm">
+          <label className="block">
+            <span className="block text-xs font-semibold text-slate-700 mb-1">Estudiante</span>
+            <select
+              required
+              value={naEstudianteId}
+              onChange={(e) => setNaEstudianteId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+            >
+              <option value="">Selecciona un estudiante…</option>
+              {estudiantes.map((e) => (
+                <option key={e.id_estudiante} value={e.id_estudiante}>
+                  {e.codigo_estudiante} — {e.apellidos}, {e.nombres} ({e.programas_inscritos} prog.)
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-semibold text-slate-700 mb-1">Programa</span>
+            <select
+              required
+              value={naProgramaId}
+              onChange={(e) => setNaProgramaId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+            >
+              <option value="">Selecciona un programa…</option>
+              {(filtros?.programas || []).map((p) => (
+                <option key={p.id_programa} value={p.id_programa}>
+                  {p.codigo_programa} · {p.codigo_practica} [{p.estado_programa}]
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-xs font-semibold text-slate-700 mb-1">Fecha de inscripción</span>
+            <input
+              type="date"
+              required
+              value={naFecha}
+              onChange={(e) => setNaFecha(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+            />
+          </label>
+
+          <div className="rounded-xl bg-teal-50/70 border border-teal-200/80 p-3 text-[11px] text-teal-900">
+            Si el programa seleccionado está en estado <strong>ACTIVO</strong> o <strong>PLANIFICADO</strong> con ventanas vigentes, se crearán automáticamente sus oportunidades de evaluación <strong>PSS-10 (INICIAL y FINAL)</strong>.
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setAsigModalOpen(false)}
+              className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={naBusy}
+              className="rounded-xl bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+            >
+              {naBusy ? 'Inscribiendo…' : 'Confirmar inscripción'}
             </button>
           </div>
         </form>

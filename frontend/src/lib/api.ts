@@ -177,6 +177,31 @@ export interface ImpactoPracticasResponse {
   por_programa: ImpactoPracticaRow[];
 }
 
+export interface EstudianteOltpRow {
+  id_estudiante: number;
+  codigo_estudiante: string;
+  nombres: string;
+  apellidos: string;
+  correo_institucional: string;
+  edad_anios: number;
+  sexo_codificado: 'F' | 'M' | 'NO_ESPECIFICADO';
+  facultad_o_area: string;
+  carrera: string;
+  ciclo_academico: number;
+  programas_inscritos: number;
+  programas_codigos: string[];
+}
+
+export interface EstudiantesOltpResponse {
+  paginacion: {
+    page: number;
+    pageSize: number;
+    totalRegistros: number;
+    totalPaginas: number;
+  };
+  estudiantes: EstudianteOltpRow[];
+}
+
 export const api = {
   login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
   logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
@@ -246,6 +271,24 @@ export const api = {
     page?: number;
     pageSize?: number;
   }) => apiGet<any>('/analytics/cumplimiento', params),
+  getEstudiantes: (params?: { buscar?: string; facultad?: string; page?: number; pageSize?: number }) =>
+    apiGet<EstudiantesOltpResponse>('/operacion/estudiantes', params),
+  crearEstudiante: (body: {
+    codigo_estudiante: string;
+    nombres: string;
+    apellidos: string;
+    correo_institucional: string;
+    edad_anios: number;
+    sexo_codificado: 'F' | 'M' | 'NO_ESPECIFICADO';
+    facultad_o_area: string;
+    carrera: string;
+    ciclo_academico: number;
+  }) => apiPost<{ ok: boolean; mensaje: string; estudiante: EstudianteOltpRow }>('/operacion/estudiantes', body),
+  crearAsignacion: (body: { id_estudiante: number; id_programa: number; fecha_inscripcion?: string }) =>
+    apiPost<{ ok: boolean; mensaje: string; asignacion: any; oportunidades_generadas: number }>(
+      '/operacion/asignaciones',
+      body,
+    ),
   getSesiones: (id_programa?: string) => apiGet<any[]>('/operacion/sesiones', { id_programa }),
   getOportunidadesAbiertas: (id_programa?: string) =>
     apiGet<any[]>('/operacion/oportunidades-abiertas', { id_programa }),

@@ -1,10 +1,340 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { CrearSesionDto, RegistrarAsistenciaDto, RegistrarResultadoDto } from './operacion.controller';
+import {
+  CrearAsignacionDto,
+  CrearEstudianteDto,
+  CrearSesionDto,
+  RegistrarAsistenciaDto,
+  RegistrarResultadoDto,
+} from './operacion.controller';
 
 @Injectable()
 export class OperacionService {
   constructor(private readonly db: DatabaseService) {}
+
+  async getEstudiantes(f: { buscar?: string; facultad?: string; page?: number; pageSize?: number }) {
+    const page = f.page ?? 1;
+    const pageSize = f.pageSize ?? 15;
+    const offset = (page - 1) * pageSize;
+    const params = {
+      buscar: f.buscar ? `%${f.buscar}%` : null,
+      facultad: f.facultad || null,
+      offset,
+      pageSize,
+    };
+
+    const whereClause = `
+      WHERE (@facultad IS NULL OR e.facultad_o_area = @facultad)
+        AND (
+          @buscar IS NULL
+          OR e.codigo_estudiante LIKE @buscar
+          OR e.nombres LIKE @buscar
+          OR e.apellidos LIKE @buscar
+          OR e.correo_institucional LIKE @buscar
+          OR e.carrera LIKE @buscar
+        )
+    `;
+
+    const [countRows, rows] = await Promise.all([
+      this.db.query<{ total_registros: number }>(
+        `SELECT COUNT(*) AS total_registros FROM dbo.estudiantes e ${whereClause}`,
+        params,
+      ),
+      this.db.query(
+        `
+        SELECT
+          e.id_estudiante,
+          e.codigo_estudiante,
+          e.nombres,
+          e.apellidos,
+          e.correo_institucional,
+          e.edad_anios,
+          e.sexo_codificado,
+          e.facultad_o_area,
+          e.carrera,
+          e.ciclo_academico,
+          COUNT(a.id_asignacion) AS programas_inscritos,
+          ISNULL(STRING_AGG(p.codigo_programa, N', '), N'') AS programas_codigos
+        FROM dbo.estudiantes e
+        LEFT JOIN dbo.asignaciones a ON a.id_estudiante = e.id_estudiante
+        LEFT JOIN dbo.programas p ON p.id_programa = a.id_programa
+        ${whereClause}
+        GROUP BY
+          e.id_estudiante,
+          e.codigo_estudiante,
+          e.nombres,
+          e.apellidos,
+          e.correo_institucional,
+          e.edad_anios,
+          e.sexo_codificado,
+          e.facultad_o_area,
+          e.carrera,
+          e.ciclo_academico
+        ORDER BY e.id_estudiante DESC
+        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        `,
+        params,
+      ),
+    ]);
+
+    const totalRegistros = Number(countRows[0]?.total_registros || 0);
+    return {
+      paginacion: {
+        page,
+        pageSize,
+        totalRegistros,
+        totalPaginas: Math.max(1, Math.ceil(totalRegistros / pageSize)),
+      },
+      estudiantes: rows.map((r) => ({
+        ...r,
+        id_estudiante: Number(r.id_estudiante),
+        edad_anios: Number(r.edad_anios),
+        ciclo_academico: Number(r.ciclo_academico),
+        programas_inscritos: Number(r.programas_inscritos || 0),
+        programas_codigos: r.programas_codigos ? String(r.programas_codigos).split(', ') : [],
+      })),
+    };
+  }
+
+  async crearEstudiante(dto: CrearEstudianteDto) {
+    const codigo = dto.codigo_estudiante.trim().toUpperCase();
+    const correo = dto.correo_institucional.trim().toLowerCase();
+    const nombres = dto.nombres.trim();
+    const apellidos = dto.apellidos.trim();
+    const facultad = dto.facultad_o_area.trim();
+    const carrera = dto.carrera.trim();
+
+    if (dto.edad_anios < 18 || dto.edad_anios > 99) {
+      throw new BadRequestException('La edad del estudiante debe estar entre 18 y 99 años.');
+    }
+    if (dto.ciclo_academico < 1 || dto.ciclo_academico > 14) {
+      throw new BadRequestException('El ciclo académico debe estar entre 1 y 14.');
+    }
+
+    const dup = await this.db.query<{ codigo_estudiante: string; correo_institucional: string }>(
+      `
+      SELECT TOP 1 codigo_estudiante, correo_institucional
+      FROM dbo.estudiantes
+      WHERE codigo_estudiante = @codigo OR LOWER(correo_institucional) = @correo
+      `,
+      { codigo, correo },
+    );
+    if (dup.length > 0) {
+      if (dup[0].codigo_estudiante.toUpperCase() === codigo) {
+        throw new ConflictException(`Ya existe un estudiante registrado con el código ${codigo}.`);
+      }
+      throw new ConflictException(`Ya existe un estudiante registrado con el correo ${correo}.`);
+    }
+
+    try {
+      const inserted = await this.db.query<any>(
+        `
+        INSERT INTO dbo.estudiantes (
+          codigo_estudiante, nombres, apellidos, correo_institucional,
+          edad_anios, sexo_codificado, facultad_o_area, carrera, ciclo_academico
+        )
+        OUTPUT
+          INSERTED.id_estudiante,
+          INSERTED.codigo_estudiante,
+          INSERTED.nombres,
+          INSERTED.apellidos,
+          INSERTED.correo_institucional,
+          INSERTED.edad_anios,
+          INSERTED.sexo_codificado,
+          INSERTED.facultad_o_area,
+          INSERTED.carrera,
+          INSERTED.ciclo_academico
+        VALUES (
+          @codigo, @nombres, @apellidos, @correo,
+          @edad, @sexo, @facultad, @carrera, @ciclo
+        );
+        `,
+        {
+          codigo,
+          nombres,
+          apellidos,
+          correo,
+          edad: dto.edad_anios,
+          sexo: dto.sexo_codificado,
+          facultad,
+          carrera,
+          ciclo: dto.ciclo_academico,
+        },
+      );
+
+      return {
+        ok: true,
+        mensaje: `Estudiante ${codigo} (${nombres} ${apellidos}) registrado correctamente en dbo.estudiantes.`,
+        estudiante: inserted[0],
+      };
+    } catch (err: any) {
+      if (err?.number === 2627 || err?.number === 2601) {
+        throw new ConflictException('El código de estudiante o el correo institucional ya se encuentran registrados.');
+      }
+      throw new BadRequestException(err?.message || 'Error al registrar el estudiante en SQL Server.');
+    }
+  }
+
+  async crearAsignacion(dto: CrearAsignacionDto) {
+    const [estRows, progRows, existingRows] = await Promise.all([
+      this.db.query<any>(
+        `SELECT id_estudiante, codigo_estudiante, nombres, apellidos FROM dbo.estudiantes WHERE id_estudiante = @id`,
+        { id: dto.id_estudiante },
+      ),
+      this.db.query<any>(
+        `
+        SELECT
+          id_programa,
+          codigo_programa,
+          nombre_programa,
+          estado_programa,
+          CONVERT(VARCHAR(10), ventana_inicial_inicio, 23) AS ventana_inicial_inicio,
+          CONVERT(VARCHAR(10), ventana_inicial_fin, 23) AS ventana_inicial_fin,
+          CONVERT(VARCHAR(10), ventana_final_inicio, 23) AS ventana_final_inicio,
+          CONVERT(VARCHAR(10), ventana_final_fin, 23) AS ventana_final_fin
+        FROM dbo.programas
+        WHERE id_programa = @id
+        `,
+        { id: dto.id_programa },
+      ),
+      this.db.query<any>(
+        `
+        SELECT id_asignacion
+        FROM dbo.asignaciones
+        WHERE id_estudiante = @idEst AND id_programa = @idProg
+        `,
+        { idEst: dto.id_estudiante, idProg: dto.id_programa },
+      ),
+    ]);
+
+    if (!estRows.length) {
+      throw new NotFoundException(`No existe el estudiante con id ${dto.id_estudiante}.`);
+    }
+    if (!progRows.length) {
+      throw new NotFoundException(`No existe el programa con id ${dto.id_programa}.`);
+    }
+    if (progRows[0].estado_programa === 'CANCELADO') {
+      throw new BadRequestException(`El programa ${progRows[0].codigo_programa} está CANCELADO y no admite inscripciones.`);
+    }
+    if (existingRows.length > 0) {
+      throw new ConflictException(
+        `El estudiante ${estRows[0].codigo_estudiante} ya se encuentra inscrito en el programa ${progRows[0].codigo_programa}.`,
+      );
+    }
+
+    const fechaInscripcion = dto.fecha_inscripcion
+      ? String(dto.fecha_inscripcion).slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+    const prog = progRows[0];
+    const tieneVentanasActivas =
+      (prog.estado_programa === 'ACTIVO' || prog.estado_programa === 'PLANIFICADO') &&
+      Boolean(
+        prog.ventana_inicial_inicio &&
+          prog.ventana_inicial_fin &&
+          prog.ventana_final_inicio &&
+          prog.ventana_final_fin,
+      );
+
+    const tx = await this.db.beginTransaction();
+    try {
+      const reqIns = tx.request();
+      reqIns.input('idEst', dto.id_estudiante);
+      reqIns.input('idProg', dto.id_programa);
+      reqIns.input('fecha', fechaInscripcion);
+      const insRes = await reqIns.query(`
+        SET NOCOUNT ON;
+        DECLARE @nueva TABLE (id_asignacion BIGINT);
+        INSERT INTO dbo.asignaciones (id_estudiante, id_programa, fecha_inscripcion, estado_asignacion)
+        OUTPUT INSERTED.id_asignacion INTO @nueva
+        VALUES (@idEst, @idProg, CAST(@fecha AS DATE), N'INSCRITO');
+
+        DECLARE @idAsig BIGINT = (SELECT TOP 1 id_asignacion FROM @nueva);
+
+        INSERT INTO dbo.historial_estados_asignacion (
+          id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
+        )
+        VALUES (@idAsig, NULL, N'INSCRITO', CAST(@fecha AS DATE), N'INSCRIPCION_DIRECTA');
+
+        SELECT
+          @idAsig AS id_asignacion,
+          @idEst AS id_estudiante,
+          @idProg AS id_programa,
+          @fecha AS fecha_inscripcion,
+          N'INSCRITO' AS estado_asignacion;
+      `);
+
+      const asignacion = insRes.recordset?.[0];
+      let oportunidadesGeneradas = 0;
+
+      if (tieneVentanasActivas && asignacion?.id_asignacion) {
+        const reqOps = tx.request();
+        reqOps.input('idAsig', Number(asignacion.id_asignacion));
+        reqOps.input('idEst', dto.id_estudiante);
+        reqOps.input('idProg', dto.id_programa);
+        reqOps.input('viIni', prog.ventana_inicial_inicio);
+        reqOps.input('viFin', prog.ventana_inicial_fin);
+        reqOps.input('vfIni', prog.ventana_final_inicio);
+        reqOps.input('vfFin', prog.ventana_final_fin);
+
+        const opsRes = await reqOps.query(`
+          SET NOCOUNT ON;
+          DECLARE @idInstr SMALLINT = (
+            SELECT TOP 1 id_instrumento
+            FROM dbo.cat_instrumentos
+            WHERE codigo_instrumento = N'PSS-10' AND activo = 1
+            ORDER BY id_instrumento ASC
+          );
+          DECLARE @idVer BIGINT = (
+            SELECT TOP 1 id_version_instrumento
+            FROM dbo.instrumento_versiones
+            WHERE id_instrumento = @idInstr AND estado_contenido = N'PUBLICADO'
+            ORDER BY id_version_instrumento DESC
+          );
+
+          IF @idInstr IS NOT NULL
+          BEGIN
+            INSERT INTO dbo.oportunidades_evaluacion (
+              id_asignacion, id_estudiante, id_programa, id_instrumento, codigo_instrumento,
+              id_evento_indice, momento, fecha_ventana_inicio, fecha_ventana_fin, fecha_prevista,
+              aplicable, id_version_instrumento
+            )
+            VALUES
+              (@idAsig, @idEst, @idProg, @idInstr, N'PSS-10', NULL, N'INICIAL',
+               CAST(@viIni AS DATE), CAST(@viFin AS DATE), CAST(@viFin AS DATE), 1, @idVer),
+              (@idAsig, @idEst, @idProg, @idInstr, N'PSS-10', NULL, N'FINAL',
+               CAST(@vfIni AS DATE), CAST(@vfFin AS DATE), CAST(@vfIni AS DATE), 1, @idVer);
+            SELECT 2 AS generadas;
+          END
+          ELSE
+          BEGIN
+            SELECT 0 AS generadas;
+          END
+        `);
+        oportunidadesGeneradas = Number(opsRes.recordset?.[0]?.generadas || 0);
+      }
+
+      await tx.commit();
+
+      return {
+        ok: true,
+        mensaje:
+          oportunidadesGeneradas > 0
+            ? `Estudiante ${estRows[0].codigo_estudiante} inscrito en ${prog.codigo_programa}. Se generaron automáticamente ${oportunidadesGeneradas} oportunidades PSS-10 (INICIAL y FINAL).`
+            : `Estudiante ${estRows[0].codigo_estudiante} inscrito en ${prog.codigo_programa}.`,
+        asignacion,
+        oportunidades_generadas: oportunidadesGeneradas,
+      };
+    } catch (err: any) {
+      await tx.rollback();
+      if (err?.number === 2627 || err?.number === 2601) {
+        throw new ConflictException(
+          `El estudiante ${estRows[0].codigo_estudiante} ya se encuentra inscrito en ${prog.codigo_programa}.`,
+        );
+      }
+      throw new BadRequestException(err?.message || 'Error al registrar la inscripción en SQL Server.');
+    }
+  }
 
   async getSesiones(idPrograma?: number) {
     return this.db.query(
