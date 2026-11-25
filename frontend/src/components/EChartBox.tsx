@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import * as echarts from 'echarts';
+import { EXECUTIVE_TOOLTIP } from '@/lib/chartTheme';
 
 interface EChartBoxProps {
   option: echarts.EChartsCoreOption;
@@ -9,7 +10,7 @@ interface EChartBoxProps {
   ariaLabel: string;
 }
 
-export function EChartBox({ option, height = 320, ariaLabel }: EChartBoxProps) {
+export function EChartBox({ option, height = 310, ariaLabel }: EChartBoxProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -17,9 +18,25 @@ export function EChartBox({ option, height = 320, ariaLabel }: EChartBoxProps) {
     const el = containerRef.current;
     if (!el) return;
 
-    const chart = echarts.init(el);
+    const chart = echarts.init(el, undefined, { renderer: 'svg' });
     chartRef.current = chart;
-    chart.setOption(option, true);
+
+    const baseTooltip =
+      typeof option.tooltip === 'object' && option.tooltip !== null
+        ? { ...EXECUTIVE_TOOLTIP, ...option.tooltip }
+        : EXECUTIVE_TOOLTIP;
+
+    const mergedOption: echarts.EChartsCoreOption = {
+      textStyle: {
+        fontFamily: 'var(--font-inter), Inter, system-ui, sans-serif',
+      },
+      animationDuration: 450,
+      animationEasing: 'cubicOut',
+      ...option,
+      tooltip: baseTooltip,
+    };
+
+    chart.setOption(mergedOption, true);
 
     const ro = new ResizeObserver(() => {
       chart.resize();

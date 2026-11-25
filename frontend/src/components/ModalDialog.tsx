@@ -76,24 +76,25 @@ export function ModalDialog({ open, onClose, title, subtitle, children }: ModalD
       {...({ closedby: 'any' } as Record<string, string>)}
       className="w-full"
     >
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-2rem)]">
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4">
+      <div className="rounded-2xl border border-slate-200/90 bg-white shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-2rem)]">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200/80 bg-slate-50/90 px-6 py-4">
           <div className="min-w-0">
-            <h1 id={titleId} className="text-base font-bold text-slate-900 leading-snug">
+            <h1 id={titleId} className="font-display text-base font-bold text-slate-900 leading-snug">
               {title}
             </h1>
-            {subtitle && <p className="text-xs text-slate-600 mt-0.5">{subtitle}</p>}
+            {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
           </div>
           <button
             type="button"
+            autoFocus
             onClick={() => dialogRef.current?.close()}
             aria-label="Cerrar ventana"
-            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-200/70 hover:text-slate-900 shrink-0"
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-200/70 hover:text-slate-900 transition-colors shrink-0"
           >
             <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
-        <div className="overflow-y-auto p-5">{children}</div>
+        <div className="overflow-y-auto p-6">{children}</div>
       </div>
     </dialog>
   );

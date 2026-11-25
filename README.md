@@ -2,7 +2,7 @@
 
 > **Reglas del sistema:** [Fase 0 Reglas y contratos](FASE_0_REGLAS_Y_CONTRATOS.md). Documenta las reglas confirmadas para los KPI, reportes, cuestionarios y cortes históricos. Las secciones históricas de este README se mantienen por contexto; para el comportamiento actual de captura, consulte la sección de fases implementadas abajo.
 
-> **Reglas confirmadas D01 a D03:** KPI-04 cuenta desde la fecha prevista de cumplimiento; RO-02 muestra el avance previo por separado. El retiro antes de tres sesiones se muestra en RO-01 como Retirado y Evaluable: No, excluido de KPI-03. Las correcciones de respuestas de cuestionario crean versiones y conservan su historial. La aplicación integral de los cortes y revisiones D03 en reportes y ETL aún está pendiente.
+> **Reglas confirmadas D01 a D03 (implementadas de punta a punta):** KPI-04 cuenta desde la fecha prevista de cumplimiento (`fecha_ventana_fin <= @fecha_corte`); RO-02 muestra el avance previo por separado. El retiro antes de tres sesiones se clasifica en RO-01 y el ETL como `Retirado` y `Evaluable: No`, excluido de KPI-03. Las correcciones de respuestas de cuestionario crean versiones (`v2+`) y conservan su historial completo. Todas las reglas D01–D03 operan de forma integral en el OLTP (`dbo.*`), el ETL idempotente (`dm.usp_ejecutar_etl`), el Data Mart (`dm.*`) y los 4 reportes BI.
 
 ### Estado de implementación (OLTP, Cuestionarios y Data Mart en SQL Server)
 

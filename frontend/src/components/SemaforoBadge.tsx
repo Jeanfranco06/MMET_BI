@@ -1,46 +1,53 @@
 'use client';
 
-import { AlertTriangle, CheckCircle2, EyeOff, MinusCircle, XCircle } from 'lucide-react';
 import type { SemaforoEstado } from '@/lib/api';
 
 const CONFIG: Record<
   SemaforoEstado,
-  { label: string; classes: string; Icon: typeof CheckCircle2 }
+  { label: string; badgeClasses: string; dotClasses: string }
 > = {
   BUENO: {
     label: 'Bueno',
-    classes: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    Icon: CheckCircle2,
+    badgeClasses: 'bg-emerald-50 text-emerald-800 border-emerald-200/90',
+    dotClasses: 'bg-emerald-500',
   },
   REGULAR: {
     label: 'Regular',
-    classes: 'bg-amber-50 text-amber-900 border-amber-200',
-    Icon: AlertTriangle,
+    badgeClasses: 'bg-amber-50 text-amber-800 border-amber-200/90',
+    dotClasses: 'bg-amber-500',
   },
   MALO: {
     label: 'Malo',
-    classes: 'bg-rose-50 text-rose-800 border-rose-200',
-    Icon: XCircle,
+    badgeClasses: 'bg-rose-50 text-rose-800 border-rose-200/90',
+    dotClasses: 'bg-rose-500',
   },
   SIN_DATOS: {
     label: 'Sin datos',
-    classes: 'bg-slate-100 text-slate-700 border-slate-200',
-    Icon: MinusCircle,
+    badgeClasses: 'bg-slate-100 text-slate-600 border-slate-200',
+    dotClasses: 'bg-slate-400',
   },
   SUPRIMIDO: {
     label: 'Suprimido (n < 5)',
-    classes: 'bg-slate-100 text-slate-700 border-slate-300',
-    Icon: EyeOff,
+    badgeClasses: 'bg-slate-100 text-slate-700 border-slate-300',
+    dotClasses: 'bg-slate-500',
   },
 };
 
-export function SemaforoBadge({ estado }: { estado: SemaforoEstado }) {
-  const { label, classes, Icon } = CONFIG[estado] || CONFIG.SIN_DATOS;
+export function SemaforoBadge({
+  estado,
+  size = 'sm',
+}: {
+  estado: SemaforoEstado;
+  size?: 'xs' | 'sm';
+}) {
+  const { label, badgeClasses, dotClasses } = CONFIG[estado] || CONFIG.SIN_DATOS;
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${classes}`}
+      className={`inline-flex items-center gap-1.5 rounded-full font-semibold border whitespace-nowrap ${badgeClasses} ${
+        size === 'xs' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-0.5 text-xs'
+      }`}
     >
-      <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClasses}`} aria-hidden="true" />
       <span>{label}</span>
     </span>
   );

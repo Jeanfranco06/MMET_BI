@@ -3,16 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --accent: #0f766e;
+  --accent: #0d9488;
+  --accent-bright: #14b8a6;
   --accent-soft: #ccfbf1;
+  --ai-accent: #6366f1;
   --surface: #ffffff;
-  --canvas: #f8fafc;
+  --canvas: #f1f5f9;
+  --sidebar-bg: #0b1220;
   --ink: #0f172a;
-  --muted: #475569;
+  --muted: #64748b;
   --border: #e2e8f0;
-  --danger: #b91c1c;
+  --danger: #dc2626;
   --danger-bg: #fef2f2;
-  --success: #15803d;
+  --success: #059669;
 }
 
 body {
@@ -21,16 +24,32 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
 /* ============================================================================
-   MODERN WEB GUIDANCE: responsive-table
+   MODERN WEB GUIDANCE: responsive-table (SaaS Enterprise Styling)
    ============================================================================ */
 .table-wrapper {
   overflow: auto;
   max-inline-size: 100%;
-  max-block-size: min(520px, 75vh);
+  max-block-size: min(560px, 75vh);
   container-type: inline-size;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  border-radius: 1rem;
   background: var(--surface);
 }
 
@@ -45,26 +64,26 @@ body {
 }
 
 .table-wrapper--paged .mwg-table thead th {
-  background: #0f3d4c;
-  color: #f8fafc;
-  text-align: center;
-  white-space: normal;
+  background: #f8fafc;
+  color: #475569;
+  text-align: left;
+  white-space: nowrap;
   line-height: 1.25;
-  padding: 0.75rem 0.65rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.025em;
+  padding: 0.75rem 1rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  border-block-end: 2px solid #0a2c38;
+  border-block-end: 1px solid #e2e8f0;
 }
 
 .table-wrapper--paged .mwg-table tbody th,
 .table-wrapper--paged .mwg-table tbody td {
-  text-align: center;
-  padding: 0.7rem 0.65rem;
-  font-size: 0.83rem;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  font-size: 0.835rem;
   vertical-align: middle;
-  border-block-end: 1px solid #e2e8f0;
+  border-block-end: 1px solid #f1f5f9;
 }
 
 .table-wrapper--paged .mwg-table tbody th {
@@ -72,20 +91,21 @@ body {
   background: transparent;
 }
 
-.table-wrapper--paged .mwg-table tbody tr:nth-child(even) {
-  background: #f8fafc;
+.table-wrapper--paged .mwg-table tbody tr {
+  transition: background-color 140ms ease;
 }
 
 .table-wrapper--paged .mwg-table tbody tr:hover {
-  background: #f0fdfa;
+  background: #f8fafc;
 }
 
 .table-wrapper--paged .mwg-table tfoot th,
 .table-wrapper--paged .mwg-table tfoot td {
-  text-align: center;
+  text-align: left;
   vertical-align: middle;
-  padding: 0.8rem 0.65rem;
-  border-block-start: 2px solid #99f6e4;
+  padding: 0.85rem 1rem;
+  border-block-start: 1px solid #cbd5e1;
+  background: #f8fafc;
 }
 
 @container (width < 640px) {
@@ -107,7 +127,7 @@ body {
   .table-wrapper--paged .mwg-table tfoot tr {
     margin: 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 0.75rem;
+    border-radius: 0.875rem;
     overflow: hidden;
     background: #ffffff;
     box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
@@ -116,13 +136,14 @@ body {
   .table-wrapper--paged .mwg-table tbody th,
   .table-wrapper--paged .mwg-table tfoot th {
     text-align: left;
-    background: #0f3d4c;
-    color: #ffffff;
-    padding: 0.65rem 0.9rem;
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 0.7rem 0.95rem;
     border-block-end: none;
   }
 
-  .table-wrapper--paged .mwg-table tbody th * {
+  .table-wrapper--paged .mwg-table tbody th *,
+  .table-wrapper--paged .mwg-table tfoot th * {
     color: inherit;
   }
 
@@ -132,7 +153,7 @@ body {
     align-items: center;
     justify-content: space-between;
     text-align: right;
-    padding: 0.55rem 0.9rem;
+    padding: 0.6rem 0.95rem;
     gap: 0.75rem;
     white-space: normal;
   }
@@ -148,7 +169,7 @@ body {
 }
 
 .table-wrapper:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-bright);
   outline-offset: 2px;
 }
 
@@ -156,15 +177,15 @@ body {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 0.875rem;
+  font-size: 0.85rem;
 }
 
 .mwg-table caption {
   text-align: left;
-  padding: 0.75rem 1rem;
-  font-weight: 600;
+  padding: 0.85rem 1.25rem;
+  font-weight: 700;
   color: var(--ink);
-  background: #f8fafc;
+  background: #ffffff;
   border-block-end: 1px solid var(--border);
 }
 
@@ -175,11 +196,14 @@ body {
 }
 
 .mwg-table thead th {
-  background: #f1f5f9;
-  color: #334155;
-  font-weight: 600;
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   text-align: left;
-  padding: 0.65rem 0.85rem;
+  padding: 0.75rem 1rem;
   border-block-end: 1px solid var(--border);
   white-space: nowrap;
 }
@@ -191,13 +215,13 @@ body {
   background: var(--surface);
   font-weight: 600;
   text-align: left;
-  padding: 0.65rem 0.85rem;
+  padding: 0.75rem 1rem;
   border-block-end: 1px solid #f1f5f9;
   white-space: nowrap;
 }
 
 .mwg-table tbody td {
-  padding: 0.65rem 0.85rem;
+  padding: 0.75rem 1rem;
   border-block-end: 1px solid #f1f5f9;
   color: #1e293b;
   white-space: nowrap;
@@ -225,7 +249,7 @@ body {
   .mwg-table tbody tr {
     margin: 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: 0.75rem;
     overflow: hidden;
   }
 
@@ -252,79 +276,7 @@ body {
 }
 
 /* ============================================================================
-   MODERN WEB GUIDANCE: tabs (single-row scroll + border-block-end indicator)
-   ============================================================================ */
-.mwg-tablist {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  gap: 0.25rem;
-  border-block-end: 1px solid var(--border);
-  scroll-snap-type: inline proximity;
-}
-
-.mwg-tablist [role="tab"] {
-  position: relative;
-  flex: none;
-  scroll-snap-align: start;
-  padding: 0.65rem 1.1rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.mwg-tablist [role="tab"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: 0.25rem;
-}
-
-.mwg-tablist [role="tab"][aria-selected="true"] {
-  color: var(--accent);
-}
-
-.mwg-tablist [role="tab"][aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  border-block-end: 3px solid var(--accent);
-}
-
-/* ============================================================================
-   MODERN WEB GUIDANCE: validate-input-after-interaction (:user-invalid)
-   ============================================================================ */
-.mwg-hint {
-  display: block;
-  color: var(--muted);
-  font-size: 0.78rem;
-  margin-block-end: 0.3rem;
-}
-
-.mwg-error-msg {
-  display: none;
-  color: var(--danger);
-  font-size: 0.8rem;
-  margin-block-start: 0.3rem;
-  font-weight: 500;
-}
-
-.mwg-field :is(input, select, textarea):is(:user-invalid, .user-invalid-fallback) {
-  border-color: var(--danger);
-  background-color: var(--danger-bg);
-}
-
-.mwg-field :is(input, select, textarea):is(:user-invalid, .user-invalid-fallback) + .mwg-error-msg {
-  display: block;
-}
-
-.mwg-field :is(input, select, textarea):user-valid {
-  border-color: var(--success);
-}
-
-/* ============================================================================
-   MODERN WEB GUIDANCE: dialog + light-dismiss-a-dialog
+   MODERN WEB GUIDANCE: dialog + slide-over drawer + light-dismiss
    ============================================================================ */
 dialog:modal {
   overscroll-behavior: contain;
@@ -337,8 +289,71 @@ dialog:modal {
 }
 
 dialog::backdrop {
-  background-color: rgba(15, 23, 42, 0.5);
-  backdrop-filter: blur(2px);
+  background-color: rgba(11, 18, 32, 0.55);
+  backdrop-filter: blur(4px);
   overflow: hidden;
   overscroll-behavior: contain;
+}
+
+/* Slide-over right drawer (AI Assistant) */
+dialog.mwg-slideover:modal {
+  margin: 0 0 0 auto;
+  height: 100dvh;
+  max-height: 100dvh;
+  width: min(32rem, 100vw);
+  max-width: 100vw;
+  overscroll-behavior: contain;
+  animation: mwg-slide-in-right 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Slide-over left drawer (Mobile Navigation) */
+dialog.mwg-nav-drawer:modal {
+  margin: 0 auto 0 0;
+  height: 100svh;
+  max-height: 100svh;
+  width: min(19rem, 84vw);
+  max-width: 100vw;
+  overscroll-behavior: contain;
+  animation: mwg-slide-in-left 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes mwg-slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes mwg-slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog.mwg-slideover:modal,
+  dialog.mwg-nav-drawer:modal {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   MODERN WEB GUIDANCE: validate-input-after-interaction (:user-invalid)
+   ============================================================================ */
+.mwg-field :is(input, select, textarea):is(:user-invalid, .user-invalid-fallback) {
+  border-color: var(--danger);
+  background-color: var(--danger-bg);
+}
+
+.mwg-field :is(input, select, textarea):user-valid {
+  border-color: var(--success);
 }

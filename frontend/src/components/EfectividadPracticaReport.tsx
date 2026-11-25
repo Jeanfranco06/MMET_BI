@@ -1,9 +1,30 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState } from 'react';
-import { Calendar, CheckCircle2, Info, X, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import {
+  ArrowUpDown,
+  Award,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Filter,
+  Info,
+  Target,
+  X,
+  XCircle,
+} from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
 import { AiReportButton } from './AiReportButton';
+import { KpiCard } from './KpiCard';
+import { EChartBox } from './EChartBox';
+import { ChartSkeleton, EmptyState, KpiGridSkeleton, SuppressedState, TableSkeleton } from './UiStates';
+import {
+  EXECUTIVE_AXIS_LABEL,
+  EXECUTIVE_SPLIT_LINE,
+  barGradient,
+  metaMarkLine,
+} from '@/lib/chartTheme';
 
 interface EfectividadPracticaReportProps {
   filtros: FiltrosResponse | null;
@@ -27,21 +48,22 @@ function compactPrograma(codigo: string): string {
 function CumpleMetaBadge({ cumple, suprimido }: { cumple: boolean | null; suprimido: boolean }) {
   if (suprimido || cumple === null) {
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" aria-hidden="true" />
         No evaluable (n &lt; 5)
       </span>
     );
   }
   if (cumple) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
         <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
         Cumple meta
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200">
       <XCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
       No cumple
     </span>
@@ -57,6 +79,8 @@ export function EfectividadPracticaReport({
   const [corte, setCorte] = useState(corteInicial);
   const [facultad, setFacultad] = useState('');
   const [vista, setVista] = useState<'practica' | 'programa'>('practica');
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,227 +116,510 @@ export function EfectividadPracticaReport({
     setVista('practica');
   };
 
-  const hayFiltrosActivos = Boolean(facultad || instrumento !== 'PSS-10' || vista !== 'practica');
+  const activeFilterCount = [
+    facultad,
+    instrumento !== 'PSS-10' ? instrumento : '',
+    vista !== 'practica' ? vista : '',
+  ].filter(Boolean).length;
+
   const kpi05 = data?.kpi05_meta_practicas;
   const metaPts = data?.meta_operativa_pts ?? (instrumento === 'PSS-10' ? 4 : 10);
-  const filas: any[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
+
+  const filasRaw: any[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
+  const filas = useMemo(() => {
+    return [...filasRaw].sort((a, b) => {
+      const av = a.suprimido ? -9999 : Number(a.reduccion_promedio ?? -999);
+      const bv = b.suprimido ? -9999 : Number(b.reduccion_promedio ?? -999);
+      return sortDir === 'desc' ? bv - av : av - bv;
+    });
+  }, [filasRaw, sortDir]);
+
   const totalParesFilas = filas.reduce((acc, r) => acc + Number(r.pares_validos || 0), 0);
+  const evaluablesFilas = filas.filter((r) => !r.suprimido && r.reduccion_promedio != null);
+  const mejorPractica = evaluablesFilas.length
+    ? [...evaluablesFilas].sort((a, b) => Number(b.reduccion_promedio) - Number(a.reduccion_promedio))[0]
+    : null;
+
+  // Chart 1: Reduction vs Operational Target (markLine)
+  const chartRankingOption = useMemo(() => {
+    const items = evaluablesFilas.slice(0, 10);
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const p = params[0];
+          const r = items[p.dataIndex];
+          const label = vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa;
+          return `<div style="font-weight:700;margin-bottom:4px">${label}</div>
+            <div>Reducción ${instrumento}: <strong style="color:#5EEAD4">${r.reduccion_promedio > 0 ? '+' : ''}${Number(r.reduccion_promedio).toFixed(2)} pts</strong></div>
+            <div style="color:#94A3B8;font-size:11px">n = ${r.pares_validos} pares · Meta: ≥ ${metaPts.toFixed(1)} pts</div>`;
+        },
+      },
+      grid: { left: 16, right: 20, top: 28, bottom: 26, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: items.map((r) => (vista === 'practica' ? r.codigo_practica : compactPrograma(r.codigo_programa))),
+        axisLine: { lineStyle: { color: '#E2E8F0' } },
+        axisTick: { show: false },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Reducción (pts)',
+        nameTextStyle: { color: '#64748B', fontSize: 11 },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
+        splitLine: EXECUTIVE_SPLIT_LINE,
+      },
+      series: [
+        {
+          name: `Reducción ${instrumento}`,
+          type: 'bar',
+          barMaxWidth: 42,
+          data: items.map((r) => ({
+            value: Number(r.reduccion_promedio.toFixed(2)),
+            itemStyle: {
+              borderRadius: [8, 8, 0, 0],
+              color: r.cumple_meta
+                ? barGradient('#14B8A6', '#0D9488')
+                : barGradient('#F59E0B', '#D97706'),
+            },
+          })),
+          markLine: metaMarkLine(metaPts, `Meta ≥ ${metaPts.toFixed(1)} pts`, '#0D9488'),
+        },
+      ],
+    };
+  }, [evaluablesFilas, instrumento, metaPts, vista]);
+
+  // Chart 2: Pre vs Post Score Comparison
+  const chartPrePostOption = useMemo(() => {
+    const items = evaluablesFilas.slice(0, 8);
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+      },
+      legend: {
+        top: 0,
+        right: 0,
+        icon: 'roundRect',
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: '#475569', fontSize: 11 },
+      },
+      grid: { left: 14, right: 16, top: 34, bottom: 24, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: items.map((r) => (vista === 'practica' ? r.codigo_practica : compactPrograma(r.codigo_programa))),
+        axisLine: { lineStyle: { color: '#E2E8F0' } },
+        axisTick: { show: false },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
+      },
+      yAxis: {
+        type: 'value',
+        name: `Puntaje ${instrumento}`,
+        nameTextStyle: { color: '#64748B', fontSize: 11 },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
+        splitLine: EXECUTIVE_SPLIT_LINE,
+      },
+      series: [
+        {
+          name: 'Prom. Inicial',
+          type: 'bar',
+          barMaxWidth: 26,
+          itemStyle: { borderRadius: [6, 6, 0, 0], color: barGradient('#94A3B8', '#64748B') },
+          data: items.map((r) => Number(r.promedio_inicial.toFixed(2))),
+        },
+        {
+          name: 'Prom. Final',
+          type: 'bar',
+          barMaxWidth: 26,
+          itemStyle: {
+            borderRadius: [6, 6, 0, 0],
+            color:
+              instrumento === 'PSS-10'
+                ? barGradient('#14B8A6', '#0D9488')
+                : barGradient('#38BDF8', '#0284C7'),
+          },
+          data: items.map((r) => Number(r.promedio_final.toFixed(2))),
+        },
+      ],
+    };
+  }, [evaluablesFilas, instrumento, vista]);
 
   return (
     <div className="space-y-5">
-      {/* Encabezado y filtros propios del reporte */}
-      <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-bold text-slate-900">
-              RG-02 · Comparativo de Efectividad y Cumplimiento de Meta por Práctica (KPI-05)
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Instrumento:{' '}
-              <strong className="text-slate-700">{instrumento}</strong> · Referencia operativa:{' '}
-              <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte:{' '}
+      {/* Header & Collapsible Filter Bar */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white shadow-card overflow-hidden">
+        <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-teal-50 text-teal-700 border border-teal-200/80">
+                RG-02
+              </span>
+              <h2 className="font-display text-lg font-bold text-slate-900 tracking-tight">
+                Comparativo de Efectividad y Cumplimiento de Meta por Práctica (KPI-05)
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Instrumento <strong className="text-slate-700">{instrumento}</strong> · Meta operativa{' '}
+              <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte{' '}
               <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
             </p>
           </div>
-          <AiReportButton
-            reporte="RG-02"
-            corte={data?.corte || corte}
-            disabled={loading || !data}
-            filtros={{ semestre, instrumento, facultad: facultad || 'TODAS', vista }}
-            kpis={
-              kpi05
-                ? {
-                    instrumento,
-                    meta_operativa_pts: metaPts,
-                    practicas_evaluables: kpi05.practicas_evaluables,
-                    practicas_cumplen_meta: kpi05.practicas_cumplen_meta,
-                    tasa_cumplimiento_meta_pct: kpi05.tasa_cumplimiento_meta,
-                    semaforo: kpi05.semaforo,
-                  }
-                : null
-            }
-            grupos={filas.map((r: any) => ({
-              nombre: vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa,
-              n: Number(r.pares_validos || 0),
-              instrumento,
-              valor: r.reduccion_promedio,
-              semaforo: r.semaforo,
-            }))}
-          />
-        </div>
 
-        <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Fecha de corte</span>
-            <div className="relative">
-              <Calendar
-                className="w-3.5 h-3.5 text-teal-700 absolute left-2.5 top-2.5 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                type="date"
-                value={corte}
-                onChange={(e) => setCorte(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 pl-8 pr-2.5 py-1.5 text-sm bg-white"
-              />
-            </div>
-          </label>
-
-          <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Instrumento</span>
-            <select
-              value={instrumento}
-              onChange={(e) => setInstrumento(e.target.value as 'PSS-10' | 'PCL-5')}
-              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
-            >
-              <option value="PSS-10">PSS-10 · Estrés percibido (0–40 pts)</option>
-              <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80 pts)</option>
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Facultad / Área</span>
-            <select
-              value={facultad}
-              onChange={(e) => setFacultad(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
-            >
-              <option value="">Todas las facultades</option>
-              {filtros?.facultades.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Instrument Segmented Toggle */}
+            <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200/80" role="group" aria-label="Selector de instrumento">
+              {(['PSS-10', 'PCL-5'] as const).map((inst) => (
+                <button
+                  key={inst}
+                  type="button"
+                  onClick={() => setInstrumento(inst)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    instrumento === inst
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {inst}
+                </button>
               ))}
-            </select>
-          </label>
+            </div>
 
-          <label className="block">
-            <span className="block text-xs font-medium text-slate-600 mb-1">Nivel de detalle</span>
-            <select
-              value={vista}
-              onChange={(e) => setVista(e.target.value as 'practica' | 'programa')}
-              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm bg-white"
-            >
-              <option value="practica">Por Práctica Principal (P-01..P-04, MIXTO)</option>
-              <option value="programa">Desglosado por Programa (Cohorte)</option>
-            </select>
-          </label>
-        </div>
-
-        {hayFiltrosActivos && (
-          <div className="mt-3 flex justify-end">
             <button
               type="button"
-              onClick={limpiarFiltros}
-              className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900"
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
             >
-              <X className="w-3.5 h-3.5" aria-hidden="true" />
-              Limpiar filtros
+              <Filter className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
+              <span>Filtros</span>
+              {activeFilterCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-[10px] font-bold text-white">
+                  {activeFilterCount}
+                </span>
+              )}
+              {filtersOpen ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
             </button>
+
+            <AiReportButton
+              reporte="RG-02"
+              corte={data?.corte || corte}
+              disabled={loading || !data}
+              filtros={{ semestre, instrumento, facultad: facultad || 'TODAS', vista }}
+              kpis={
+                kpi05
+                  ? {
+                      instrumento,
+                      meta_operativa_pts: metaPts,
+                      practicas_evaluables: kpi05.practicas_evaluables,
+                      practicas_cumplen_meta: kpi05.practicas_cumplen_meta,
+                      tasa_cumplimiento_meta_pct: kpi05.tasa_cumplimiento_meta,
+                      semaforo: kpi05.semaforo,
+                    }
+                  : null
+              }
+              grupos={filas.map((r: any) => ({
+                nombre: vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa,
+                n: Number(r.pares_validos || 0),
+                instrumento,
+                valor: r.reduccion_promedio,
+                semaforo: r.semaforo,
+              }))}
+            />
+          </div>
+        </div>
+
+        {filtersOpen && (
+          <div className="px-5 pb-5 pt-3 border-t border-slate-100 bg-slate-50/50 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Fecha de corte</span>
+                <div className="relative">
+                  <Calendar className="w-3.5 h-3.5 text-teal-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={corte}
+                    onChange={(e) => setCorte(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-xs font-medium text-slate-800"
+                  />
+                </div>
+              </label>
+
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Instrumento (separado)</span>
+                <select
+                  value={instrumento}
+                  onChange={(e) => setInstrumento(e.target.value as 'PSS-10' | 'PCL-5')}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                >
+                  <option value="PSS-10">PSS-10 · Estrés percibido (0–40)</option>
+                  <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80)</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Facultad / Área</span>
+                <select
+                  value={facultad}
+                  onChange={(e) => setFacultad(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                >
+                  <option value="">Todas las facultades</option>
+                  {filtros?.facultades.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Nivel de detalle</span>
+                <select
+                  value={vista}
+                  onChange={(e) => setVista(e.target.value as 'practica' | 'programa')}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
+                >
+                  <option value="practica">Por Práctica Principal (P-01..P-04, MIXTO)</option>
+                  <option value="programa">Desglosado por Programa (Cohorte)</option>
+                </select>
+              </label>
+            </div>
+
+            {activeFilterCount > 0 && (
+              <div className="flex justify-end pt-2 border-t border-slate-200/70">
+                <button
+                  type="button"
+                  onClick={limpiarFiltros}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  Limpiar filtros
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>
 
       {error && (
-        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
           {error}
         </div>
       )}
 
-      {/* Tabla principal */}
-      <section className="space-y-3">
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="px-5 py-3.5 bg-gradient-to-r from-slate-50 to-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+      {/* Top Executive KPI Cards */}
+      {loading && !data ? (
+        <KpiGridSkeleton count={4} />
+      ) : (
+        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <KpiCard
+            code="KPI-05"
+            title={`Prácticas que cumplen meta (${instrumento})`}
+            value={
+              kpi05?.tasa_cumplimiento_meta != null
+                ? `${Number(kpi05.tasa_cumplimiento_meta).toFixed(1)}`
+                : '—'
+            }
+            unit={kpi05?.tasa_cumplimiento_meta != null ? '%' : undefined}
+            semaforo={kpi05?.semaforo || 'SIN_DATOS'}
+            metaLabel="Meta: ≥ 80%"
+            subtitle={
+              kpi05
+                ? `${kpi05.practicas_cumplen_meta} de ${kpi05.practicas_evaluables} evaluables`
+                : 'Sin evaluables'
+            }
+            progressPct={kpi05?.tasa_cumplimiento_meta ?? null}
+            accent="teal"
+            Icon={Award}
+          />
+
+          <KpiCard
+            code="META OPERATIVA"
+            title={`Umbral mínimo requerido (${instrumento})`}
+            value={`≥ ${metaPts.toFixed(1)}`}
+            unit="pts"
+            subtitle={instrumento === 'PSS-10' ? 'Reducción estrés percibido' : 'Cambio clínicamente relevante'}
+            accent="indigo"
+            Icon={Target}
+          />
+
+          <KpiCard
+            code="MEJOR DESEMPEÑO"
+            title={vista === 'practica' ? 'Práctica líder en reducción' : 'Cohorte líder en reducción'}
+            value={
+              mejorPractica
+                ? `+${Number(mejorPractica.reduccion_promedio).toFixed(2)}`
+                : 'n < 5'
+            }
+            unit={mejorPractica ? 'pts' : undefined}
+            subtitle={
+              mejorPractica
+                ? vista === 'practica'
+                  ? `${mejorPractica.codigo_practica} · n = ${mejorPractica.pares_validos}`
+                  : `${compactPrograma(mejorPractica.codigo_programa)} · n = ${mejorPractica.pares_validos}`
+                : 'Sin grupos con n ≥ 5'
+            }
+            accent="emerald"
+          />
+
+          <KpiCard
+            code="MUESTRA TOTAL"
+            title="Pares válidos analizados al corte"
+            value={totalParesFilas.toLocaleString()}
+            unit="pares"
+            subtitle={`${evaluablesFilas.length} de ${filas.length} grupos evaluables`}
+            accent="sky"
+          />
+        </section>
+      )}
+
+      {/* 2 Interactive ECharts */}
+      {loading && !data ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <ChartSkeleton height={280} />
+          <ChartSkeleton height={280} />
+        </div>
+      ) : (
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
+            <div className="mb-3">
+              <h3 className="font-display text-sm font-bold text-slate-900">
+                Reducción Promedio vs. Meta Operativa ({instrumento})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Línea punteada marca el objetivo mínimo de ≥ {metaPts.toFixed(1)} puntos
+              </p>
+            </div>
+            {evaluablesFilas.length > 0 ? (
+              <EChartBox
+                option={chartRankingOption}
+                height={275}
+                ariaLabel={`Ranking de reducción promedio por práctica en ${instrumento}`}
+              />
+            ) : (
+              <SuppressedState context={facultad ? `la facultad ${facultad}` : 'el filtro seleccionado'} />
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
+            <div className="mb-3">
+              <h3 className="font-display text-sm font-bold text-slate-900">
+                Comparativo Puntaje Inicial vs. Final ({instrumento})
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Solo se grafican grupos que cumplen el umbral de privacidad estadística (n ≥ 5)
+              </p>
+            </div>
+            {evaluablesFilas.length > 0 ? (
+              <EChartBox
+                option={chartPrePostOption}
+                height={275}
+                ariaLabel={`Comparativo de puntajes inicial y final por práctica en ${instrumento}`}
+              />
+            ) : (
+              <SuppressedState context={facultad ? `la facultad ${facultad}` : 'el filtro seleccionado'} />
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Detailed Table */}
+      {loading && !data ? (
+        <TableSkeleton rows={5} cols={7} />
+      ) : (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-card overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2.5">
-              <span className="w-1.5 h-5 rounded-full bg-teal-700 shrink-0" aria-hidden="true" />
-              <h3 id={captionId} className="text-sm font-bold text-slate-900 tracking-tight">
+              <span className="w-1.5 h-5 rounded-full bg-teal-500 shrink-0" aria-hidden="true" />
+              <h3 id={captionId} className="font-display text-sm font-bold text-slate-900 tracking-tight">
                 {vista === 'practica'
                   ? `Ranking de efectividad por Práctica Principal — ${instrumento}`
                   : `Desglose de efectividad por Programa (Cohorte) — ${instrumento}`}
               </h3>
-              <span className="text-xs font-medium text-teal-800 bg-teal-50 border border-teal-200/80 px-2.5 py-0.5 rounded-full">
-                Corte {formatFechaEs(corte)}
-              </span>
             </div>
             <span className="text-xs font-medium text-slate-500 tabular-nums">
-              Total filas: <strong className="text-slate-700">{filas.length}</strong>
+              {filas.length} {vista === 'practica' ? 'prácticas' : 'programas'}
             </span>
           </div>
 
-          <div
-            tabIndex={0}
-            role="region"
-            aria-labelledby={captionId}
-            className="table-wrapper table-wrapper--paged !border-0 !rounded-none"
-          >
-            <table className="mwg-table">
-              <caption className="sr-only">
-                Comparativo de efectividad y cumplimiento de meta por práctica en {instrumento} al corte{' '}
-                {formatFechaEs(corte)}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">{vista === 'practica' ? 'Práctica principal' : 'Programa (Cohorte)'}</th>
-                  {vista === 'programa' && <th scope="col">Práctica</th>}
-                  <th scope="col">Pares válidos (n)</th>
-                  <th scope="col">Prom. Inicial</th>
-                  <th scope="col">Prom. Final</th>
-                  <th scope="col">Reducción (pts)</th>
-                  <th scope="col">Meta operativa</th>
-                  <th scope="col">Cumplimiento de meta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && !data ? (
+          {!filas.length ? (
+            <EmptyState
+              title="Sin datos para este filtro"
+              description="Cambia de facultad, semestre o instrumento para revisar el desempeño de las prácticas."
+              actionLabel={activeFilterCount > 0 ? 'Limpiar filtros' : undefined}
+              onAction={activeFilterCount > 0 ? limpiarFiltros : undefined}
+              icon="filter"
+            />
+          ) : (
+            <div
+              tabIndex={0}
+              role="region"
+              aria-labelledby={captionId}
+              className="table-wrapper table-wrapper--paged !border-0 !rounded-none"
+            >
+              <table className="mwg-table">
+                <caption className="sr-only">
+                  Comparativo de efectividad y cumplimiento de meta por práctica en {instrumento} al corte {formatFechaEs(corte)}
+                </caption>
+                <thead>
                   <tr>
-                    <td colSpan={vista === 'programa' ? 8 : 7} className="text-center py-10 text-slate-500">
-                      Consultando resultados por práctica en SQL Server...
-                    </td>
+                    <th scope="col">{vista === 'practica' ? 'Práctica principal' : 'Programa (Cohorte)'}</th>
+                    {vista === 'programa' && <th scope="col">Práctica</th>}
+                    <th scope="col">Pares (n)</th>
+                    <th scope="col">Inicial</th>
+                    <th scope="col">Final</th>
+                    <th scope="col">
+                      <button
+                        type="button"
+                        onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+                        className="inline-flex items-center gap-1 hover:text-slate-900 uppercase tracking-wider"
+                      >
+                        Reducción
+                        <ArrowUpDown className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </th>
+                    <th scope="col">Meta</th>
+                    <th scope="col">Estado</th>
                   </tr>
-                ) : !filas.length ? (
-                  <tr>
-                    <td colSpan={vista === 'programa' ? 8 : 7} className="text-center py-10 text-slate-500">
-                      No se encontraron registros para los filtros seleccionados.
-                    </td>
-                  </tr>
-                ) : (
-                  filas.map((r: any) => (
+                </thead>
+                <tbody>
+                  {filas.map((r: any) => (
                     <tr key={vista === 'practica' ? r.id_practica : r.id_programa}>
                       <th scope="row">
                         {vista === 'practica' ? (
                           <div>
-                            <div className="font-semibold text-slate-900">{r.codigo_practica}</div>
+                            <div className="font-bold text-slate-900">{r.codigo_practica}</div>
                             <div className="text-[11px] font-normal text-slate-500">
                               {r.nombre_practica}
-                              {r.es_mixto !== undefined && (
-                                <> · {r.es_mixto ? 'Mixto' : 'Unicomponente'}</>
-                              )}
+                              {r.es_mixto !== undefined && <> · {r.es_mixto ? 'Mixto' : 'Unicomponente'}</>}
                             </div>
                           </div>
                         ) : (
                           <div>
-                            <div className="font-semibold text-slate-900">{compactPrograma(r.codigo_programa)}</div>
+                            <div className="font-bold text-slate-900">{compactPrograma(r.codigo_programa)}</div>
                             <div className="text-[11px] font-normal text-slate-500">{r.estado_programa}</div>
                           </div>
                         )}
                       </th>
                       {vista === 'programa' && (
                         <td data-label="Práctica">
-                          <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium text-xs border border-slate-200/80">
+                          <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200/80">
                             {r.codigo_practica}
                           </span>
                         </td>
                       )}
-                      <td data-label="Pares válidos (n)" className="tabular-nums font-medium text-slate-700">
+                      <td data-label="Pares (n)" className="tabular-nums font-semibold text-slate-700">
                         {r.pares_validos}
                       </td>
-                      <td data-label="Prom. Inicial" className="tabular-nums text-slate-700">
+                      <td data-label="Inicial" className="tabular-nums text-slate-600">
                         {r.suprimido ? 'Suprimido' : r.promedio_inicial != null ? r.promedio_inicial.toFixed(2) : '—'}
                       </td>
-                      <td data-label="Prom. Final" className="tabular-nums text-slate-700">
+                      <td data-label="Final" className="tabular-nums text-slate-600">
                         {r.suprimido ? 'Suprimido' : r.promedio_final != null ? r.promedio_final.toFixed(2) : '—'}
                       </td>
-                      <td data-label="Reducción (pts)" className="tabular-nums font-bold">
+                      <td data-label="Reducción" className="tabular-nums font-bold">
                         {r.suprimido ? (
                           <span className="text-slate-400 font-normal">n &lt; 5</span>
                         ) : r.reduccion_promedio != null ? (
@@ -324,105 +631,41 @@ export function EfectividadPracticaReport({
                           '—'
                         )}
                       </td>
-                      <td data-label="Meta operativa" className="tabular-nums text-slate-600">
+                      <td data-label="Meta" className="tabular-nums text-slate-500 text-xs font-medium">
                         ≥ {metaPts.toFixed(1)} pts
                       </td>
-                      <td data-label="Cumplimiento de meta">
+                      <td data-label="Estado">
                         <CumpleMetaBadge cumple={r.cumple_meta} suprimido={r.suprimido} />
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
-              {kpi05 && (
-                <tfoot>
-                  <tr className="bg-teal-50/75 font-semibold text-slate-900 text-xs">
-                    <th scope="row" className="bg-teal-50/90 whitespace-nowrap">
-                      <div className="font-bold text-slate-900">TOTAL GENERAL</div>
-                      <div className="text-[11px] font-medium text-teal-800">Instrumento {instrumento}</div>
-                    </th>
-                    {vista === 'programa' && <td className="text-slate-400">—</td>}
-                    <td data-label="Pares válidos (n)" className="tabular-nums font-bold">
-                      {totalParesFilas.toLocaleString()}
-                    </td>
-                    <td className="text-slate-400">—</td>
-                    <td className="text-slate-400">—</td>
-                    <td className="text-slate-400">—</td>
-                    <td data-label="Meta operativa" className="tabular-nums font-bold text-slate-700">
-                      ≥ {metaPts.toFixed(1)} pts
-                    </td>
-                    <td data-label="Cumplimiento de meta" className="whitespace-nowrap">
-                      <div className="font-bold text-emerald-800">
-                        {kpi05.practicas_cumplen_meta} cumplen meta
-                      </div>
-                      <div className="text-[11px] font-medium text-slate-600">
-                        {kpi05.practicas_evaluables} prácticas evaluables
-                      </div>
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
-            </table>
+      <details className="rounded-2xl border border-slate-200/80 bg-white px-5 py-3 text-xs text-slate-600 shadow-card">
+        <summary className="cursor-pointer font-semibold text-slate-700 inline-flex items-center gap-2 select-none">
+          <Info className="w-4 h-4 text-teal-600" aria-hidden="true" />
+          Reglas de cómputo aplicadas en RG-02 (KPI-05)
+        </summary>
+        <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4 leading-relaxed">
+          <div>
+            <strong className="text-slate-900 block mb-0.5">Separación de escalas</strong>
+            PSS-10 y PCL-5 se analizan siempre de forma independiente desde <code>dm.vw_HechoEfectividadPractica</code>.
+          </div>
+          <div>
+            <strong className="text-slate-900 block mb-0.5">Filtro previo por Facultad</strong>
+            Al filtrar por facultad/área, el umbral de <strong>n ≥ 5 pares válidos</strong> se recalcula sobre el subconjunto filtrado.
+          </div>
+          <div>
+            <strong className="text-slate-900 block mb-0.5">Metas operativas</strong>
+            PSS-10 exige <code>≥ 4.0 pts</code> de reducción; PCL-5 exige <code>≥ 10.0 pts</code> sobre el mismo evento índice.
           </div>
         </div>
-      </section>
-
-      {/* Leyenda y reglas operacionales DEBAJO del listado */}
-      <section aria-label="Leyenda de estados de cumplimiento y reglas de cómputo" className="space-y-3 pt-1">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 mt-1.5 shrink-0" aria-hidden="true" />
-            <div>
-              <div className="text-xs font-semibold text-slate-900">Cumple meta</div>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Práctica evaluable cuya reducción promedio alcanza o supera la meta operativa del instrumento.
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 mt-1.5 shrink-0" aria-hidden="true" />
-            <div>
-              <div className="text-xs font-semibold text-slate-900">No cumple</div>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Práctica evaluable cuya reducción promedio se ubica por debajo de la meta operativa al corte.
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 p-3.5 flex items-start gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-slate-500 mt-1.5 shrink-0" aria-hidden="true" />
-            <div>
-              <div className="text-xs font-semibold text-slate-900">No evaluable (n &lt; 5)</div>
-              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                Muestra inferior a 5 pares válidos; los promedios se suprimen por privacidad estadística.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <details className="bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-600">
-          <summary className="cursor-pointer font-medium text-slate-700 inline-flex items-center gap-1.5 select-none">
-            <Info className="w-3.5 h-3.5 text-teal-700" aria-hidden="true" />
-            Ver reglas de cómputo aplicadas
-          </summary>
-          <div className="mt-2.5 pt-2.5 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3 leading-relaxed">
-            <div>
-              <strong className="text-slate-800 block">Separación de escalas</strong>
-              PSS-10 y PCL-5 se analizan siempre de forma independiente y nunca se combinan.
-            </div>
-            <div>
-              <strong className="text-slate-800 block">Práctica evaluable</strong>
-              Debe acumular al menos <strong>5 pares válidos en ventana</strong> al corte seleccionado.
-            </div>
-            <div>
-              <strong className="text-slate-800 block">Referencia operativa por instrumento</strong>
-              PSS-10 utiliza referencia <code>≥ 4.0 pts</code>; PCL-5 utiliza <code>≥ 10.0 pts</code> sobre el mismo evento índice.
-            </div>
-          </div>
-        </details>
-      </section>
+      </details>
     </div>
   );
 }

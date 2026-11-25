@@ -1,17 +1,28 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Award,
+  Calendar,
+  ChevronRight,
   ClipboardCheck,
   Database,
-  HeartPulse,
-  ShieldCheck,
-  Users,
+  Filter,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
   UserPlus,
+  Users,
+  X,
 } from 'lucide-react';
-import { api, type FiltrosResponse, type ResumenResponse } from '@/lib/api';
+import { api, type FiltrosResponse } from '@/lib/api';
+import { BrandLogo } from './BrandLogo';
+import { LoginScreen } from './LoginScreen';
+import { ResumenEjecutivoView } from './ResumenEjecutivoView';
 import { EvolucionReport } from './EvolucionReport';
 import { EfectividadPracticaReport } from './EfectividadPracticaReport';
 import { ContinuidadReport } from './ContinuidadReport';
@@ -20,240 +31,600 @@ import { OperacionView } from './OperacionView';
 import { StudentEvaluations } from './StudentEvaluations';
 import { AdminStudentAccounts } from './AdminStudentAccounts';
 
-type SeccionId = 'evolucion' | 'practicas' | 'continuidad' | 'cumplimiento' | 'operacion' | 'usuarios';
+type SeccionId =
+  | 'resumen'
+  | 'evolucion'
+  | 'practicas'
+  | 'continuidad'
+  | 'cumplimiento'
+  | 'operacion'
+  | 'usuarios';
 
-const NAV_ITEMS: Array<{ id: SeccionId; label: string; subtitle: string; Icon: typeof Activity }> = [
-  { id: 'evolucion', label: 'RG-01 · Evolución PSS-10 y PCL-5', subtitle: 'KPI-01 y KPI-02', Icon: Activity },
-  { id: 'practicas', label: 'RG-02 · Efectividad por Práctica', subtitle: 'KPI-05 · Meta operativa', Icon: Award },
-  { id: 'continuidad', label: 'RO-01 · Continuidad y Abandono', subtitle: 'KPI-03 · Por estudiante', Icon: Users },
-  { id: 'cumplimiento', label: 'RO-02 · Control de Evaluaciones', subtitle: 'KPI-04 · Cumplimiento', Icon: ClipboardCheck },
-  { id: 'operacion', label: 'Operación OLTP & ETL', subtitle: 'Captura y Data Mart SQL Server', Icon: Database },
+interface NavItem {
+  id: SeccionId;
+  label: string;
+  shortLabel: string;
+  subtitle: string;
+  section: string;
+  Icon: typeof Activity;
+  adminOnly?: boolean;
+}
+
+const NAV_ITEMS: NavItem[] = [
+  {
+    id: 'resumen',
+    label: 'Resumen Ejecutivo',
+    shortLabel: 'Resumen',
+    subtitle: 'KPI-01 a KPI-05',
+    section: 'Inicio',
+    Icon: LayoutDashboard,
+  },
+  {
+    id: 'evolucion',
+    label: 'RG-01 · Evolución Estrés y Trauma',
+    shortLabel: 'RG-01 · Evolución',
+    subtitle: 'KPI-01 · KPI-02',
+    section: 'Reportes Gerenciales',
+    Icon: Activity,
+  },
+  {
+    id: 'practicas',
+    label: 'RG-02 · Efectividad por Práctica',
+    shortLabel: 'RG-02 · Prácticas',
+    subtitle: 'KPI-05 · Meta operativa',
+    section: 'Reportes Gerenciales',
+    Icon: Award,
+  },
+  {
+    id: 'continuidad',
+    label: 'RO-01 · Continuidad y Abandono',
+    shortLabel: 'RO-01 · Continuidad',
+    subtitle: 'KPI-03 · Por estudiante',
+    section: 'Reportes Operativos',
+    Icon: Users,
+  },
+  {
+    id: 'cumplimiento',
+    label: 'RO-02 · Control de Evaluaciones',
+    shortLabel: 'RO-02 · Evaluaciones',
+    subtitle: 'KPI-04 · Cumplimiento',
+    section: 'Reportes Operativos',
+    Icon: ClipboardCheck,
+  },
+  {
+    id: 'operacion',
+    label: 'Operación OLTP & ETL',
+    shortLabel: 'Operación & ETL',
+    subtitle: 'Captura y Data Mart',
+    section: 'Operación & Data Mart',
+    Icon: Database,
+  },
+  {
+    id: 'usuarios',
+    label: 'Cuentas Estudiantiles',
+    shortLabel: 'Cuentas',
+    subtitle: 'Acceso PSS-10 / PCL-5',
+    section: 'Administración',
+    Icon: UserPlus,
+    adminOnly: true,
+  },
 ];
+
+function getInitials(name: string): string {
+  const cleaned = name.replace(/[^a-zA-Z0-9]/g, ' ').trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return cleaned.slice(0, 2).toUpperCase() || 'US';
+}
 
 export function DashboardApp() {
   const [authState, setAuthState] = useState<'checking' | 'signed-out' | 'signed-in'>('checking');
-  const [loginName, setLoginName] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ id_usuario: number; id_estudiante: number | null; nombre_usuario: string; rol: string } | null>(null);
-  const [seccion, setSeccion] = useState<SeccionId>('evolucion');
+  const [currentUser, setCurrentUser] = useState<{
+    id_usuario: number;
+    id_estudiante: number | null;
+    nombre_usuario: string;
+    rol: string;
+  } | null>(null);
+
+  const [seccion, setSeccion] = useState<SeccionId>('resumen');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [globalFiltersOpen, setGlobalFiltersOpen] = useState(false);
+
+  // Global context filters
   const [semestre, setSemestre] = useState<string>('2026-II');
-  const [corte] = useState<string>('2026-11-23');
+  const [corte, setCorte] = useState<string>('2026-11-23');
+  const [facultadGlobal, setFacultadGlobal] = useState<string>('');
+  const [practicaGlobal, setPracticaGlobal] = useState<string>('');
+  const [programaGlobal, setProgramaGlobal] = useState<string>('');
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
   const [filtros, setFiltros] = useState<FiltrosResponse | null>(null);
-  const [totales, setTotales] = useState<ResumenResponse['totales'] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const mobileDrawerRef = useRef<HTMLDialogElement | null>(null);
+
   useEffect(() => {
-    api.me().then((user) => { setCurrentUser(user); setAuthState('signed-in'); }).catch(() => setAuthState('signed-out'));
+    api
+      .me()
+      .then((user) => {
+        setCurrentUser(user);
+        setAuthState('signed-in');
+      })
+      .catch(() => setAuthState('signed-out'));
   }, []);
 
-  const submitLogin = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  // Sync native <dialog> for mobile nav drawer
+  useEffect(() => {
+    const dialog = mobileDrawerRef.current;
+    if (!dialog) return;
+    if (mobileNavOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!mobileNavOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    const dialog = mobileDrawerRef.current;
+    if (!dialog) return;
+    const onClose = () => {
+      dialog.returnValue = '';
+      setMobileNavOpen(false);
+    };
+    dialog.addEventListener('close', onClose);
+    return () => dialog.removeEventListener('close', onClose);
+  }, []);
+
+  const handleLogin = async (username: string, password: string) => {
     setLoginError(null);
     setLoginBusy(true);
     try {
-      const result = await api.login({ username: loginName, password: loginPassword });
+      const result = await api.login({ username, password });
       setCurrentUser(result.user);
-      setLoginPassword('');
       setAuthState('signed-in');
     } catch (e: any) {
-      setLoginError(e.message);
+      setLoginError(e.message || 'Credenciales inválidas.');
     } finally {
       setLoginBusy(false);
     }
   };
 
+  const handleLogout = async () => {
+    await api.logout();
+    setCurrentUser(null);
+    setAuthState('signed-out');
+  };
+
   const cargarCabecera = useCallback(async () => {
     setError(null);
     try {
-      const [f, res] = await Promise.all([api.getFiltros(), api.getResumen({ corte })]);
+      const f = await api.getFiltros();
       setFiltros(f);
-      setTotales(res.totales);
     } catch (e: any) {
       setError(`No se pudo conectar al backend NestJS: ${e.message}`);
     }
-  }, [corte]);
+  }, []);
 
   useEffect(() => {
-    if (authState === 'signed-in') cargarCabecera();
-  }, [cargarCabecera, authState]);
+    if (authState === 'signed-in' && currentUser?.rol !== 'ESTUDIANTE') {
+      cargarCabecera();
+    }
+  }, [cargarCabecera, authState, currentUser?.rol]);
 
   const handleDataMutated = () => {
     setRefreshTick((t) => t + 1);
     cargarCabecera();
   };
 
-  const navItems = currentUser?.rol === 'ADMIN'
-    ? [...NAV_ITEMS, { id: 'usuarios' as const, label: 'Cuentas de estudiantes', subtitle: 'Acceso a formularios', Icon: UserPlus }]
-    : NAV_ITEMS;
+  const globalFilterCount = [
+    semestre !== '2026-II' ? semestre || 'ALL' : '',
+    corte !== '2026-11-23' ? corte : '',
+    facultadGlobal,
+    practicaGlobal,
+    programaGlobal,
+  ].filter(Boolean).length;
+
+  const clearGlobalFilters = () => {
+    setSemestre('2026-II');
+    setCorte('2026-11-23');
+    setFacultadGlobal('');
+    setPracticaGlobal('');
+    setProgramaGlobal('');
+  };
 
   if (authState !== 'signed-in') {
     return (
-      <main className="min-h-screen grid place-items-center bg-slate-100 p-5">
-        <form onSubmit={submitLogin} className="w-full max-w-md space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm" aria-labelledby="login-title">
-          <div>
-            <h1 id="login-title" className="text-xl font-bold text-slate-900">MMET · Bienestar BI</h1>
-            <p className="mt-1 text-sm text-slate-600">Inicia sesión para consultar el sistema.</p>
-          </div>
-          {authState === 'checking' ? <p role="status">Verificando sesión…</p> : <>
-            <div className="mwg-field">
-              <label htmlFor="login-name" className="block text-sm font-medium text-slate-800">Usuario</label>
-              <input id="login-name" name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required value={loginName} onChange={(e) => setLoginName(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            <div className="mwg-field">
-              <label htmlFor="login-password" className="block text-sm font-medium text-slate-800">Contraseña</label>
-              <input id="login-password" name="password" type="password" autoComplete="current-password" required value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            {loginError && <p role="alert" className="text-sm text-rose-800">{loginError}</p>}
-            <button type="submit" disabled={loginBusy} className="w-full rounded-lg bg-teal-700 px-4 py-2 font-semibold text-white disabled:opacity-50">{loginBusy ? 'Ingresando…' : 'Ingresar'}</button>
-          </>}
-        </form>
-      </main>
+      <LoginScreen
+        checking={authState === 'checking'}
+        busy={loginBusy}
+        error={loginError}
+        onSubmit={handleLogin}
+      />
     );
   }
 
   if (currentUser?.rol === 'ESTUDIANTE') {
-    return <main className="min-h-screen bg-slate-100 p-4 sm:p-8"><div className="mx-auto max-w-4xl"><StudentEvaluations username={currentUser.nombre_usuario} onLogout={async () => { await api.logout(); setCurrentUser(null); setAuthState('signed-out'); }} /></div></main>;
+    return <StudentEvaluations username={currentUser.nombre_usuario} onLogout={handleLogout} />;
   }
 
-  return (
-    <div className="min-h-screen flex flex-col lg:flex-row">
-      {/* Navegación lateral semántica */}
-      <aside className="lg:w-72 bg-slate-900 text-slate-100 shrink-0 flex flex-col">
-        <div className="p-5 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-teal-600 flex items-center justify-center">
-              <HeartPulse className="w-5 h-5 text-white" aria-hidden="true" />
-            </div>
-            <div>
-              <h1 className="text-base font-bold tracking-tight text-white">MMET · Bienestar BI</h1>
-              <p className="text-xs text-slate-400">Trujillo · Semestre 2026-II</p>
-            </div>
-          </div>
-        </div>
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || currentUser?.rol === 'ADMIN');
+  const groupedSections = Array.from(new Set(visibleNavItems.map((i) => i.section)));
+  const activeNav = visibleNavItems.find((n) => n.id === seccion) || visibleNavItems[0];
 
-        <nav aria-label="Navegación principal" className="p-3 space-y-1 flex-1">
-          {navItems.map(({ id, label, subtitle, Icon }) => {
-            const active = seccion === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-current={active ? 'page' : undefined}
-                onClick={() => setSeccion(id)}
-                className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors ${
-                  active
-                    ? 'bg-teal-700/90 text-white shadow-sm'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                }`}
-              >
-                <Icon className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" />
-                <div>
-                  <div className="text-sm font-semibold leading-tight">{label}</div>
-                  <div className={`text-xs ${active ? 'text-teal-100' : 'text-slate-400'}`}>{subtitle}</div>
+  const renderSidebarNav = (isMobile = false) => (
+    <div className="flex flex-col h-full bg-[#0B1220] text-slate-200 select-none">
+      {/* Brand Header */}
+      <div
+        className={`h-16 px-4 border-b border-slate-800/80 flex items-center ${
+          !isMobile && sidebarCollapsed ? 'justify-center' : 'justify-between'
+        }`}
+      >
+        <BrandLogo variant="dark" compact={!isMobile && sidebarCollapsed} subtitle="UNT · 2026-II" />
+        {isMobile ? (
+          <button
+            type="button"
+            autoFocus
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Cerrar menú de navegación"
+            className="rounded-xl p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+          >
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        ) : !sidebarCollapsed ? (
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(true)}
+            aria-label="Colapsar barra lateral"
+            title="Colapsar sidebar"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+          >
+            <PanelLeftClose className="w-4 h-4" aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+
+      {/* Expand button when collapsed */}
+      {!isMobile && sidebarCollapsed && (
+        <div className="px-2 pt-3 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(false)}
+            aria-label="Expandir barra lateral"
+            title="Expandir sidebar"
+            className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+          >
+            <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {/* Navigation Groups */}
+      <nav aria-label="Navegación principal" className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        {groupedSections.map((groupName) => {
+          const items = visibleNavItems.filter((i) => i.section === groupName);
+          return (
+            <div key={groupName} className="space-y-1">
+              {(!sidebarCollapsed || isMobile) && (
+                <div className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  {groupName}
                 </div>
-              </button>
-            );
-          })}
-        </nav>
+              )}
+              {items.map(({ id, shortLabel, subtitle, Icon }) => {
+                const active = seccion === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-current={active ? 'page' : undefined}
+                    title={!isMobile && sidebarCollapsed ? shortLabel : undefined}
+                    onClick={() => {
+                      setSeccion(id);
+                      if (isMobile) setMobileNavOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-all ${
+                      !isMobile && sidebarCollapsed ? 'justify-center' : ''
+                    } ${
+                      active
+                        ? 'bg-teal-500/15 text-teal-300 border border-teal-400/25 shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white border border-transparent'
+                    }`}
+                  >
+                    <Icon
+                      className={`w-4 h-4 shrink-0 ${active ? 'text-teal-400' : 'text-slate-400'}`}
+                      aria-hidden="true"
+                    />
+                    {(!sidebarCollapsed || isMobile) && (
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold truncate leading-tight">{shortLabel}</div>
+                        <div className={`text-[10px] truncate mt-0.5 ${active ? 'text-teal-200/80' : 'text-slate-500'}`}>
+                          {subtitle}
+                        </div>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </nav>
 
-        <div className="p-4 border-t border-slate-800 text-xs text-slate-400 space-y-1.5">
-          <div className="flex items-center gap-1.5 text-teal-300 font-medium">
-            <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-            <span>Ética y Privacidad Activas</span>
+      {/* Sidebar Footer: Data Mart status + User Profile + Logout */}
+      <div className="border-t border-slate-800/80 p-3 space-y-3">
+        {(!sidebarCollapsed || isMobile) && (
+          <div className="rounded-xl bg-slate-900/90 border border-slate-800 px-3 py-2.5 space-y-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-teal-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" aria-hidden="true" />
+                Data Mart Activo
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">dm.*</span>
+            </div>
+            <div className="text-[10px] text-slate-400">
+              Último corte cargado: <strong className="text-slate-200">{corte}</strong>
+            </div>
           </div>
-          <p>Identificadores anonimizados · Supresión automática si n &lt; 5 · Sin diagnóstico clínico ni causalidad.</p>
+        )}
+
+        <div
+          className={`flex items-center gap-2.5 ${
+            !isMobile && sidebarCollapsed ? 'flex-col' : 'justify-between'
+          }`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-teal-500 to-indigo-600 text-white text-xs font-bold flex items-center justify-center shrink-0">
+              {getInitials(currentUser?.nombre_usuario || 'US')}
+            </div>
+            {(!sidebarCollapsed || isMobile) && (
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-white truncate">
+                  {currentUser?.nombre_usuario}
+                </div>
+                <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-teal-300">
+                  {currentUser?.rol}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="Cerrar sesión"
+            title="Cerrar sesión"
+            className="rounded-xl p-2 text-slate-400 hover:bg-rose-500/15 hover:text-rose-300 transition-colors shrink-0"
+          >
+            <LogOut className="w-4 h-4" aria-hidden="true" />
+          </button>
         </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen flex bg-[#F1F5F9]">
+      {/* Desktop Collapsible Sidebar */}
+      <aside
+        className={`hidden lg:block sticky top-0 h-screen shrink-0 transition-all duration-200 border-r border-slate-800/80 ${
+          sidebarCollapsed ? 'w-[72px]' : 'w-64'
+        }`}
+      >
+        {renderSidebarNav(false)}
       </aside>
 
-      {/* Contenido principal */}
+      {/* Mobile Native Slide-Over Drawer */}
+      <dialog
+        ref={mobileDrawerRef}
+        aria-label="Menú de navegación"
+        {...({ closedby: 'any' } as Record<string, string>)}
+        className="mwg-nav-drawer lg:hidden"
+      >
+        {renderSidebarNav(true)}
+      </dialog>
+
+      {/* Main App Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-10">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold text-slate-900">
-                {navItems.find((n) => n.id === seccion)?.label}
-              </h2>
-              <p className="text-xs text-slate-500">
-                Conectado en vivo a SQL Server <code className="bg-slate-100 px-1.5 py-0.5 rounded">MMET_BI_OLTP</code>
-                {totales && (
-                  <>
-                    {' · '}
-                    {totales.total_estudiantes.toLocaleString()} estudiantes ·{' '}
-                    {totales.total_asistencias.toLocaleString()} asistencias
-                  </>
-                )}
-              </p>
+        {/* Sticky Contextual Topbar */}
+        <header className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6">
+          <div className="h-16 flex items-center justify-between gap-3">
+            {/* Left: Mobile Menu + Breadcrumb */}
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Abrir menú de navegación"
+                className="lg:hidden rounded-xl p-2 text-slate-600 hover:bg-slate-100"
+              >
+                <Menu className="w-5 h-5" aria-hidden="true" />
+              </button>
+
+              <nav aria-label="Ruta actual" className="flex items-center gap-1.5 text-xs min-w-0">
+                <span className="hidden sm:inline text-slate-400 font-medium">{activeNav.section}</span>
+                <ChevronRight className="hidden sm:inline w-3.5 h-3.5 text-slate-300 shrink-0" aria-hidden="true" />
+                <span className="font-display text-sm sm:text-[15px] font-bold text-slate-900 truncate">
+                  {activeNav.label}
+                </span>
+              </nav>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={async () => { await api.logout(); setAuthState('signed-out'); }} className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700">Cerrar sesión</button>
-              <label className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-                <span>Semestre:</span>
+            {/* Right: Context Pills + Global Filters + Refresh */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="hidden md:inline-flex items-center gap-1.5 rounded-full bg-slate-100 border border-slate-200/80 px-3 py-1 text-xs font-semibold text-slate-700">
+                <Calendar className="w-3.5 h-3.5 text-teal-600" aria-hidden="true" />
+                <span>{semestre || 'Todos'}</span>
+                <span className="text-slate-300">·</span>
+                <span className="tabular-nums text-slate-600">{corte}</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setGlobalFiltersOpen((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  globalFiltersOpen || globalFilterCount > 0
+                    ? 'border-teal-300 bg-teal-50 text-teal-800'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Filter className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">Filtros globales</span>
+                {globalFilterCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-[10px] font-bold text-white">
+                    {globalFilterCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDataMutated}
+                aria-label="Recargar datos del Data Mart"
+                title="Recargar datos"
+                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50 hover:text-teal-700 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          {/* Collapsible Global Filters Panel */}
+          {globalFiltersOpen && (
+            <div className="pb-4 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-3">
+              <label className="block min-w-[140px]">
+                <span className="block text-[11px] font-semibold text-slate-500 mb-1">Semestre</span>
                 <select
-                  aria-label="Seleccionar semestre académico"
                   value={semestre}
                   onChange={(e) => setSemestre(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs bg-white font-semibold text-slate-800"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800"
                 >
                   {(filtros?.semestres?.length ? filtros.semestres : ['2026-II']).map((s) => (
                     <option key={s} value={s}>
                       {s}
                     </option>
                   ))}
-                  <option value="">Todos</option>
+                  <option value="">Todos los semestres</option>
                 </select>
               </label>
+
+              <label className="block min-w-[150px]">
+                <span className="block text-[11px] font-semibold text-slate-500 mb-1">Corte global</span>
+                <input
+                  type="date"
+                  value={corte}
+                  onChange={(e) => setCorte(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800"
+                />
+              </label>
+
+              {seccion === 'resumen' && (
+                <>
+                  <label className="block min-w-[170px]">
+                    <span className="block text-[11px] font-semibold text-slate-500 mb-1">Facultad / Área</span>
+                    <select
+                      value={facultadGlobal}
+                      onChange={(e) => setFacultadGlobal(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">Todas las facultades</option>
+                      {filtros?.facultades.map((f) => (
+                        <option key={f} value={f}>
+                          {f}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block min-w-[170px]">
+                    <span className="block text-[11px] font-semibold text-slate-500 mb-1">Práctica</span>
+                    <select
+                      value={practicaGlobal}
+                      onChange={(e) => setPracticaGlobal(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800"
+                    >
+                      <option value="">Todas las prácticas</option>
+                      {filtros?.practicas.map((p) => (
+                        <option key={p.id_practica} value={p.id_practica}>
+                          {p.codigo_practica} · {p.nombre_practica}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+
+              {globalFilterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearGlobalFilters}
+                  className="inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  Restablecer
+                </button>
+              )}
             </div>
-          </div>
+          )}
         </header>
 
-        <main id="main-content" className="p-6 space-y-6 flex-1">
+        {/* Main Content Canvas */}
+        <main id="main-content" className="p-4 sm:p-6 lg:p-7 space-y-6 flex-1 max-w-[1600px] w-full mx-auto">
           {error && (
-            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+            <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
               <strong>Error de conexión:</strong> {error}
             </div>
           )}
 
-          {/* REPORTE 1: EVOLUCIÓN DEL ESTRÉS PERCIBIDO Y SÍNTOMAS POSTRAUMÁTICOS (KPI-01 y KPI-02) */}
-          {seccion === 'evolucion' && (
-            <EvolucionReport key={`ev-${refreshTick}`} filtros={filtros} corteInicial={corte} semestre={semestre} />
+          {seccion === 'resumen' && (
+            <ResumenEjecutivoView
+              key={`res-${refreshTick}`}
+              filtros={filtros}
+              corte={corte}
+              semestre={semestre}
+              facultadGlobal={facultadGlobal}
+              practicaGlobal={practicaGlobal}
+              programaGlobal={programaGlobal}
+              onNavigate={(target) => setSeccion(target)}
+            />
           )}
 
-          {/* REPORTE 2: COMPARATIVO DE EFECTIVIDAD Y CUMPLIMIENTO DE META POR PRÁCTICA (KPI-05) */}
+          {seccion === 'evolucion' && (
+            <EvolucionReport
+              key={`ev-${refreshTick}-${corte}`}
+              filtros={filtros}
+              corteInicial={corte}
+              semestre={semestre}
+            />
+          )}
+
           {seccion === 'practicas' && (
             <EfectividadPracticaReport
-              key={`pr-${refreshTick}`}
+              key={`pr-${refreshTick}-${corte}`}
               filtros={filtros}
               corteInicial={corte}
               semestre={semestre}
             />
           )}
 
-          {/* REPORTE 3: SEGUIMIENTO DE CONTINUIDAD Y ABANDONO POR ESTUDIANTE (KPI-03) */}
           {seccion === 'continuidad' && (
             <ContinuidadReport
-              key={`co-${refreshTick}`}
+              key={`co-${refreshTick}-${corte}`}
               filtros={filtros}
               corteInicial={corte}
               semestre={semestre}
             />
           )}
 
-          {/* REPORTE 4: CONTROL DE EVALUACIONES PSICOLÓGICAS PENDIENTES Y COMPLETADAS (KPI-04) */}
           {seccion === 'cumplimiento' && (
             <CumplimientoReport
-              key={`cu-${refreshTick}`}
+              key={`cu-${refreshTick}-${corte}`}
               filtros={filtros}
               corteInicial={corte}
               semestre={semestre}
             />
           )}
 
-          {/* OPERACIÓN TRANSACCIONAL OLTP */}
           {seccion === 'operacion' && (
             <OperacionView
               filtros={filtros}
@@ -261,7 +632,10 @@ export function DashboardApp() {
               onDataMutated={handleDataMutated}
             />
           )}
-          {seccion === 'usuarios' && currentUser?.rol === 'ADMIN' && <AdminStudentAccounts onLogout={async () => { await api.logout(); setCurrentUser(null); setAuthState('signed-out'); }} />}
+
+          {seccion === 'usuarios' && currentUser?.rol === 'ADMIN' && (
+            <AdminStudentAccounts onLogout={handleLogout} />
+          )}
         </main>
       </div>
     </div>
