@@ -169,6 +169,16 @@ Solución de Inteligencia de Negocios y soporte transaccional OLTP diseñada par
 * `POST /api/evaluacion/admin/:id/corregir` — Crear una versión corregida con motivo; conserva respuestas y resultado previos.
 * `POST /api/operacion/resultados` — **Deshabilitado**; no acepta puntajes totales ingresados manualmente.
 
+#### Usuarios y credenciales de prueba preconfigurados
+
+| Rol | Usuario | Contraseña | Alcance y vistas disponibles |
+| :--- | :--- | :--- | :--- |
+| **`ADMIN`** | `admin-local` | `CambiarPorClaveDeAlMenos14Caracteres!` | Acceso total: Tableros BI, Gestión Operativa (Padrón, Pase de Lista por Sesión, Sesiones, Correcciones, Eventos Índice), Control ETL y Cuentas de Estudiantes. |
+| **`COORDINACION`** | `coordinacion-test` | `Coordinacion2026*!` | Reportes BI, Padrón de Estudiantes e Inscripciones, Pase de Lista por Sesión y Programación de Sesiones. |
+| **`EVALUACION`** | `evaluacion-test` | `Evaluacion2026*!` | Reportes BI, Corrección Versionada de Evaluaciones, Registro de Eventos Índice y consulta de sesiones. |
+| **`DIRECCION`** | `direccion-test` | `Direccion2026*!` | Reportes BI estratégicos y operacionales (`Tablero Visual`, `RO-01`, `RO-02`, `RG-01`, `RG-02`). |
+| **`ESTUDIANTE`** | `estudiante-test` | `Estudiante2026*!` | Portal del Estudiante (vinculado a `UNT26-EST-0001` · Mariana Isabel Torres Lozano) para responder cuestionarios `PSS-10` / `PCL-5`. |
+
 ---
 
 ## 6. Variables de Entorno
