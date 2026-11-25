@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { RegistrarAsistenciaDto, RegistrarResultadoDto } from './operacion.controller';
+import { CrearSesionDto, RegistrarAsistenciaDto, RegistrarResultadoDto } from './operacion.controller';
 
 @Injectable()
 export class OperacionService {
@@ -88,7 +88,7 @@ export class OperacionService {
         USING (SELECT @idAsig AS id_asignacion, @idSes AS id_sesion) AS src
           ON target.id_asignacion = src.id_asignacion AND target.id_sesion = src.id_sesion
         WHEN MATCHED THEN
-          UPDATE SET estado_asistencia = @estado, minutos_asistidos = @mins, registrado_en = SYSDATETIMEOFFSET()
+          UPDATE SET estado_asistencia = @estado, minutos_asistidos = @mins, actualizado_en = SYSDATETIMEOFFSET()
         WHEN NOT MATCHED THEN
           INSERT (id_programa, id_asignacion, id_sesion, estado_asistencia, minutos_asistidos)
           VALUES (@idProg, @idAsig, @idSes, @estado, @mins);
@@ -106,6 +106,164 @@ export class OperacionService {
     }
 
     return { ok: true, mensaje: 'Asistencia registrada correctamente.' };
+  }
+
+  async crearSesion(dto: CrearSesionDto) {
+    const [progRows, practRows] = await Promise.all([
+      this.db.query(
+        `SELECT id_programa, codigo_programa, estado_programa FROM dbo.programas WHERE id_programa = @id`,
+        { id: dto.id_programa },
+      ),
+      this.db.query(
+        `SELECT id_practica, codigo_practica, nombre_practica, es_mixto FROM dbo.cat_practicas WHERE id_practica = @id AND activo = 1`,
+        { id: dto.id_practica_tecnica },
+      ),
+    ]);
+
+    if (!progRows.length) {
+      throw new NotFoundException(`No existe el programa con id ${dto.id_programa}.`);
+    }
+    if (!practRows.length) {
+      throw new BadRequestException(`No existe la práctica técnica activa con id ${dto.id_practica_tecnica}.`);
+    }
+    if (practRows[0].es_mixto) {
+      throw new BadRequestException(
+        'Una sesión individual debe tener una técnica concreta (P-01 a P-04), no MIXTO.',
+      );
+    }
+
+    const fecha = String(dto.fecha_sesion).slice(0, 10);
+    const hora = dto.hora_inicio || '09:00';
+    const fechaHoraInicio = `${fecha}T${hora}:00-05:00`;
+    const estado = dto.estado_sesion || 'PROGRAMADA';
+    const motivo = estado === 'REALIZADA' ? 'EJECUCION_NORMAL' : 'PROGRAMACION_INICIAL';
+
+    try {
+      const inserted = await this.db.query<any>(
+        `
+        DECLARE @nueva TABLE (id_sesion BIGINT);
+        INSERT INTO dbo.sesiones (
+          id_programa, numero_sesion, id_practica_tecnica, modalidad,
+          duracion_programada_min, fecha_sesion, fecha_hora_inicio,
+          estado_sesion, motivo_estado_codigo
+        )
+        OUTPUT INSERTED.id_sesion INTO @nueva
+        VALUES (
+          @idPrograma, @numeroSesion, @idPractica, @modalidad,
+          @duracion, CAST(@fecha AS DATE), CAST(@fechaHoraInicio AS DATETIMEOFFSET(0)),
+          @estado, @motivo
+        );
+
+        DECLARE @idNueva BIGINT = (SELECT TOP 1 id_sesion FROM @nueva);
+
+        INSERT INTO dbo.historial_estados_sesion (id_sesion, estado_anterior, estado_nuevo, motivo_codigo)
+        VALUES (@idNueva, NULL, @estado, @motivo);
+
+        SELECT
+          s.id_sesion,
+          s.id_programa,
+          p.codigo_programa,
+          s.numero_sesion,
+          cp.codigo_practica,
+          cp.nombre_practica,
+          s.modalidad,
+          s.duracion_programada_min,
+          CONVERT(VARCHAR(10), s.fecha_sesion, 23) AS fecha_sesion,
+          s.estado_sesion
+        FROM dbo.sesiones s
+        JOIN dbo.programas p ON p.id_programa = s.id_programa
+        JOIN dbo.cat_practicas cp ON cp.id_practica = s.id_practica_tecnica
+        WHERE s.id_sesion = @idNueva;
+        `,
+        {
+          idPrograma: dto.id_programa,
+          numeroSesion: dto.numero_sesion,
+          idPractica: dto.id_practica_tecnica,
+          modalidad: dto.modalidad,
+          duracion: dto.duracion_programada_min,
+          fecha,
+          fechaHoraInicio,
+          estado,
+          motivo,
+        },
+      );
+
+      return {
+        ok: true,
+        mensaje: 'Sesión programada correctamente.',
+        sesion: inserted[0],
+      };
+    } catch (err: any) {
+      if (err?.number === 2627 || err?.number === 2601) {
+        throw new BadRequestException(
+          `Ya existe la sesión número ${dto.numero_sesion} en el programa ${progRows[0].codigo_programa}.`,
+        );
+      }
+      throw new BadRequestException(err?.message || 'Error al crear la sesión en SQL Server.');
+    }
+  }
+
+  async ejecutarEtl(fechaCorte?: string) {
+    const fecha = fechaCorte ? String(fechaCorte).slice(0, 10) : '2026-11-23';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      throw new BadRequestException('fecha_corte debe tener formato AAAA-MM-DD.');
+    }
+
+    try {
+      await this.db.query(
+        `DECLARE @fc DATE = CAST(@fecha AS DATE); EXEC dm.usp_ejecutar_etl @fecha_corte = @fc;`,
+        { fecha },
+      );
+
+      const logs = await this.db.query<any>(
+        `
+        SELECT TOP 1
+          id_ejecucion_etl,
+          CONVERT(VARCHAR(10), fecha_corte, 23) AS fecha_corte,
+          inicio_ejecucion,
+          fin_ejecucion,
+          estado,
+          filas_continuidad,
+          filas_cumplimiento,
+          filas_resultados,
+          incidencias_detectadas,
+          mensaje,
+          usuario_ejecucion
+        FROM dm.etl_log_ejecuciones
+        WHERE fecha_corte = CAST(@fecha AS DATE)
+        ORDER BY id_ejecucion_etl DESC
+        `,
+        { fecha },
+      );
+
+      const ejecucion = logs[0] || null;
+      const incidencias = ejecucion
+        ? await this.db.query<any>(
+            `
+            SELECT
+              id_incidencia,
+              regla_codigo,
+              severidad,
+              entidad_origen,
+              id_registro_origen,
+              detalle,
+              registrado_en
+            FROM dm.etl_incidencias_calidad
+            WHERE id_ejecucion_etl = @idEjecucion
+            ORDER BY id_incidencia
+            `,
+            { idEjecucion: ejecucion.id_ejecucion_etl },
+          )
+        : [];
+
+      return {
+        ok: true,
+        ejecucion,
+        incidencias,
+      };
+    } catch (err: any) {
+      throw new BadRequestException(err?.message || 'Error al ejecutar el proceso ETL del Data Mart.');
+    }
   }
 
   async registrarResultado(dto: RegistrarResultadoDto) {

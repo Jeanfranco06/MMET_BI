@@ -53,54 +53,131 @@ export class AnalyticsService {
     return 'MALO';
   }
 
+  /**
+   * Resuelve la fecha de corte solicitada a la clave sustituta `sk_tiempo`
+   * disponible en el Data Mart (exacta o el corte cargado inmediato anterior).
+   */
+  private async resolveCorteDm(corte: string): Promise<{ skCorte: number; fechaAplicada: string }> {
+    const clean = /^\d{4}-\d{2}-\d{2}$/.test(corte) ? corte : '2026-11-23';
+    const targetSk = Number(clean.replace(/-/g, ''));
+
+    const rows = await this.db.query<{ sk_tiempo: number; fecha: string }>(
+      `
+      SELECT TOP 1
+        t.sk_tiempo,
+        CONVERT(VARCHAR(10), t.fecha, 23) AS fecha
+      FROM dm.DimTiempo t
+      WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
+        AND t.sk_tiempo <= @targetSk
+      ORDER BY t.sk_tiempo DESC
+      `,
+      { targetSk },
+    );
+
+    if (rows.length > 0) {
+      return { skCorte: Number(rows[0].sk_tiempo), fechaAplicada: rows[0].fecha };
+    }
+
+    const latest = await this.db.query<{ sk_tiempo: number; fecha: string }>(
+      `
+      SELECT TOP 1
+        t.sk_tiempo,
+        CONVERT(VARCHAR(10), t.fecha, 23) AS fecha
+      FROM dm.DimTiempo t
+      WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
+      ORDER BY t.sk_tiempo DESC
+      `,
+    );
+
+    if (latest.length > 0) {
+      return { skCorte: Number(latest[0].sk_tiempo), fechaAplicada: latest[0].fecha };
+    }
+
+    return { skCorte: targetSk, fechaAplicada: clean };
+  }
+
   async getFiltros() {
-    const [practicas, programas, facultades, ciclos, gruposEtarios, sexos, categoriasEvento, rangoFechas] = await Promise.all([
+    const [
+      practicas,
+      programas,
+      facultades,
+      ciclos,
+      gruposEtarios,
+      sexos,
+      categoriasEvento,
+      cortesDisponibles,
+      rangoFechas,
+    ] = await Promise.all([
       this.db.query(`
-        SELECT id_practica, codigo_practica, nombre_practica, descripcion, es_mixto
-        FROM dbo.cat_practicas
-        WHERE activo = 1
+        SELECT
+          id_practica,
+          codigo_practica,
+          nombre_practica,
+          tipo_practica,
+          es_mixto
+        FROM dm.DimPractica
         ORDER BY id_practica
       `),
       this.db.query(`
-        SELECT p.id_programa, p.codigo_programa, p.nombre_programa, p.periodo_academico,
-               p.id_practica_principal, cp.codigo_practica, cp.nombre_practica,
-               CONVERT(VARCHAR(10), p.fecha_inicio, 23) AS fecha_inicio,
-               CONVERT(VARCHAR(10), p.fecha_cierre, 23) AS fecha_cierre,
-               p.estado_programa
-        FROM dbo.programas p
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
+        WITH prog_pract AS (
+          SELECT DISTINCT sk_programa, sk_practica
+          FROM dm.HechoContinuidad
+        )
+        SELECT
+          p.id_programa,
+          p.codigo_programa,
+          p.nombre_programa,
+          p.periodo_academico,
+          pr.id_practica AS id_practica_principal,
+          pr.codigo_practica,
+          pr.nombre_practica,
+          CONVERT(VARCHAR(10), p.fecha_inicio, 23) AS fecha_inicio,
+          CONVERT(VARCHAR(10), p.fecha_cierre, 23) AS fecha_cierre,
+          p.estado_programa
+        FROM dm.DimPrograma p
+        LEFT JOIN prog_pract pp ON pp.sk_programa = p.sk_programa
+        LEFT JOIN dm.DimPractica pr ON pr.sk_practica = pp.sk_practica
         ORDER BY p.fecha_inicio, p.id_programa
       `),
       this.db.query(`
         SELECT DISTINCT facultad_o_area AS facultad
-        FROM dbo.estudiantes
+        FROM dm.DimEstudiante
         ORDER BY facultad_o_area
       `),
       this.db.query(`
         SELECT DISTINCT ciclo_academico
-        FROM dbo.estudiantes
+        FROM dm.DimEstudiante
         ORDER BY ciclo_academico
       `),
       this.db.query(`
         SELECT DISTINCT grupo_etario
-        FROM dbo.estudiantes
+        FROM dm.DimEstudiante
         ORDER BY grupo_etario
       `),
       this.db.query(`
         SELECT DISTINCT sexo_codificado
-        FROM dbo.estudiantes
+        FROM dm.DimEstudiante
         ORDER BY sexo_codificado
       `),
       this.db.query(`
-        SELECT id_categoria_evento, codigo_categoria, nombre_categoria
-        FROM dbo.cat_categorias_evento_indice
-        WHERE activo = 1
-        ORDER BY id_categoria_evento
+        SELECT DISTINCT
+          codigo_categoria,
+          nombre_categoria
+        FROM dm.DimEventoIndice
+        WHERE es_no_aplica = 0
+        ORDER BY codigo_categoria
       `),
       this.db.query(`
-        SELECT CONVERT(VARCHAR(10), MIN(fecha_inicio), 23) AS fecha_min,
-               CONVERT(VARCHAR(10), MAX(ventana_final_fin), 23) AS fecha_max
-        FROM dbo.programas
+        SELECT CONVERT(VARCHAR(10), t.fecha, 23) AS fecha_corte
+        FROM dm.DimTiempo t
+        WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
+        ORDER BY t.fecha DESC
+      `),
+      this.db.query(`
+        SELECT
+          CONVERT(VARCHAR(10), MIN(fecha_inicio), 23) AS fecha_min,
+          CONVERT(VARCHAR(10), MAX(fecha_cierre), 23) AS fecha_max
+        FROM dm.DimPrograma
       `),
     ]);
 
@@ -112,186 +189,118 @@ export class AnalyticsService {
       gruposEtarios: gruposEtarios.map((g) => g.grupo_etario),
       sexos: sexos.map((s) => s.sexo_codificado),
       categoriasEvento,
+      cortesDisponibles: cortesDisponibles.map((c) => c.fecha_corte),
       semestres: Array.from(new Set(programas.map((p: any) => p.periodo_academico))),
-      rangoFechas: rangoFechas[0] || { fecha_min: '2026-08-01', fecha_max: '2026-12-31' },
+      rangoFechas: rangoFechas[0] || { fecha_min: '2026-08-10', fecha_max: '2026-12-17' },
     };
   }
 
   async getResumen(f: FiltrosQuery) {
+    const { skCorte, fechaAplicada } = await this.resolveCorteDm(f.corte);
     const params: Record<string, any> = {
-      corte: f.corte,
+      skCorte,
       idPrograma: f.idPrograma ?? null,
       idPractica: f.idPractica ?? null,
       facultad: f.facultad ?? null,
     };
 
-    // 1. Pares válidos PSS-10 y PCL-5 (en_ventana = 1, es_vigente = 1, fecha_realizacion <= corte)
-    const paresRows = await this.db.query(
-      `
-      WITH pares AS (
+    // 1. KPI-01 (PSS-10) y KPI-02 (PCL-5) desde dm.HechoResultadosEvaluacion (estrictamente separados)
+    const [paresRows, contRows, cumpRows, totalesRows] = await Promise.all([
+      this.db.query(
+        `
         SELECT
-          op_ini.codigo_instrumento,
-          r_ini.puntaje_total AS ini_pts,
-          r_fin.puntaje_total AS fin_pts,
-          (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
-        FROM dbo.oportunidades_evaluacion op_ini
-        JOIN dbo.resultados_evaluacion r_ini
-          ON r_ini.id_oportunidad = op_ini.id_oportunidad
-         AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
-         AND r_ini.en_ventana = 1 AND r_ini.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.oportunidades_evaluacion op_fin
-          ON op_fin.id_asignacion = op_ini.id_asignacion
-         AND op_fin.id_instrumento = op_ini.id_instrumento
-         AND op_fin.momento = N'FINAL'
-         AND (
-              (op_ini.codigo_instrumento = N'PSS-10' AND op_fin.id_evento_indice IS NULL)
-              OR
-              (op_ini.codigo_instrumento = N'PCL-5' AND op_fin.id_evento_indice = op_ini.id_evento_indice)
-             )
-        JOIN dbo.resultados_evaluacion r_fin
-          ON r_fin.id_oportunidad = op_fin.id_oportunidad
-         AND r_fin.es_vigente = 1 AND r_fin.estado_validez = N'VALIDO'
-         AND r_fin.en_ventana = 1 AND r_fin.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.programas p ON p.id_programa = op_ini.id_programa
-        JOIN dbo.estudiantes e ON e.id_estudiante = op_ini.id_estudiante
-        WHERE op_ini.momento = N'INICIAL'
-          AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
-          AND (@idPrograma IS NULL OR op_ini.id_programa = @idPrograma)
-          AND (@idPractica IS NULL OR p.id_practica_principal = @idPractica)
+          i.codigo_instrumento,
+          SUM(CAST(h.ParesValidos AS INT)) AS pares_validos,
+          CAST(SUM(CAST(h.SumaInicial AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_inicial,
+          CAST(SUM(CAST(h.SumaFinal AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_final,
+          CAST(SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS reduccion_promedio,
+          SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
+          SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
+          SUM(CAST(h.EsIncremento AS INT)) AS aumentaron
+        FROM dm.HechoResultadosEvaluacion h
+        JOIN dm.DimInstrumento i ON i.sk_instrumento = h.sk_instrumento
+        JOIN dm.DimPrograma    p ON p.sk_programa    = h.sk_programa
+        JOIN dm.DimPractica   pr ON pr.sk_practica   = h.sk_practica
+        JOIN dm.DimEstudiante  e ON e.sk_estudiante  = h.sk_estudiante
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
+          AND (@idPractica IS NULL OR pr.id_practica = @idPractica)
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-      )
-      SELECT
-        codigo_instrumento,
-        COUNT(*) AS pares_validos,
-        CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
-        CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
-        CAST(AVG(CAST(delta_pts AS FLOAT)) AS DECIMAL(6,2)) AS reduccion_promedio,
-        SUM(CASE WHEN delta_pts > 0 THEN 1 ELSE 0 END) AS disminuyeron,
-        SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
-        SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
-      FROM pares
-      GROUP BY codigo_instrumento
-      `,
-      params,
-    );
+        GROUP BY i.codigo_instrumento
+        `,
+        params,
+      ),
+      // 2. KPI-03 (Continuidad — D02) desde dm.HechoContinuidad
+      this.db.query(
+        `
+        SELECT
+          ISNULL(SUM(CAST(h.EsEvaluable AS INT)), 0) AS evaluables,
+          ISNULL(SUM(CAST(h.Continua AS INT)), 0) AS continuan,
+          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'RETIRADO' AND h.EsEvaluable = 1 THEN 1 ELSE 0 END), 0) AS retirados_evaluables,
+          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          ISNULL(SUM(CASE WHEN h.EsEvaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
+        FROM dm.HechoContinuidad h
+        JOIN dm.DimPrograma          p  ON p.sk_programa           = h.sk_programa
+        JOIN dm.DimPractica          pr ON pr.sk_practica          = h.sk_practica
+        JOIN dm.DimEstudiante        e  ON e.sk_estudiante         = h.sk_estudiante
+        JOIN dm.DimEstadoContinuidad ec ON ec.sk_estado_continuidad = h.sk_estado_continuidad
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
+          AND (@idPractica IS NULL OR pr.id_practica = @idPractica)
+          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
+        `,
+        params,
+      ),
+      // 3. KPI-04 (Cumplimiento — D01) desde dm.HechoCumplimientoEvaluaciones
+      this.db.query(
+        `
+        SELECT
+          COUNT(*) AS oportunidades_abiertas,
+          ISNULL(SUM(CAST(h.EsElegible AS INT)), 0) AS elegibles,
+          ISNULL(SUM(CAST(h.EsCompletadaElegible AS INT)), 0) AS completadas,
+          ISNULL(SUM(CAST(h.EsEnVentana AS INT)), 0) AS completadas_en_ventana,
+          ISNULL(SUM(CAST(h.EsTardia AS INT)), 0) AS completadas_tardias,
+          ISNULL(SUM(CAST(h.EsVencida AS INT)), 0) AS vencidas,
+          ISNULL(SUM(CAST(h.EsPendiente AS INT)), 0) AS pendientes_en_ventana
+        FROM dm.HechoCumplimientoEvaluaciones h
+        JOIN dm.DimPrograma   p  ON p.sk_programa   = h.sk_programa
+        JOIN dm.DimPractica   pr ON pr.sk_practica  = h.sk_practica
+        JOIN dm.DimEstudiante e  ON e.sk_estudiante = h.sk_estudiante
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
+          AND (@idPractica IS NULL OR pr.id_practica = @idPractica)
+          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
+        `,
+        params,
+      ),
+      // 4. Totales institucionales desde dimensiones y hechos del DM
+      this.db.query(
+        `
+        SELECT
+          (SELECT COUNT(*) FROM dm.DimEstudiante) AS total_estudiantes,
+          (SELECT COUNT(*) FROM dm.DimPrograma) AS total_programas,
+          (SELECT ISNULL(SUM(SesionesExigibles), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS sesiones_realizadas,
+          (SELECT ISNULL(SUM(Asistencias), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS total_asistencias
+        `,
+        { skCorte },
+      ),
+    ]);
 
     const pssRow = paresRows.find((r) => r.codigo_instrumento === 'PSS-10');
     const pclRow = paresRows.find((r) => r.codigo_instrumento === 'PCL-5');
-
-    // 2. Continuidad Estudiantil (KPI-03) al corte C
-    const contRows = await this.db.query(
-      `
-      WITH ses_corte AS (
-        SELECT id_sesion, id_programa, fecha_sesion, numero_sesion
-        FROM dbo.sesiones
-        WHERE estado_sesion = N'REALIZADA'
-          AND fecha_sesion <= CAST(@corte AS DATE)
-      ),
-      primera_asis AS (
-        SELECT asis.id_asignacion, MIN(sc.fecha_sesion) AS fecha_primera
-        FROM dbo.asistencias asis
-        JOIN ses_corte sc ON sc.id_sesion = asis.id_sesion
-        WHERE asis.estado_asistencia = N'ASISTIO'
-        GROUP BY asis.id_asignacion
-      ),
-      ses_post_inicio AS (
-        SELECT
-          a.id_asignacion,
-          a.fecha_retiro,
-          sc.id_sesion,
-          sc.fecha_sesion,
-          asis.estado_asistencia,
-          ROW_NUMBER() OVER (PARTITION BY a.id_asignacion ORDER BY sc.fecha_sesion DESC, sc.numero_sesion DESC) AS rn_reciente,
-          COUNT(*) OVER (PARTITION BY a.id_asignacion) AS sesiones_desde_inicio
-        FROM dbo.asignaciones a
-        JOIN dbo.programas p ON p.id_programa = a.id_programa
-        JOIN dbo.estudiantes e ON e.id_estudiante = a.id_estudiante
-        JOIN primera_asis pa ON pa.id_asignacion = a.id_asignacion
-        JOIN ses_corte sc ON sc.id_programa = a.id_programa AND sc.fecha_sesion >= pa.fecha_primera
-        LEFT JOIN dbo.asistencias asis ON asis.id_asignacion = a.id_asignacion AND asis.id_sesion = sc.id_sesion
-        WHERE (@idPrograma IS NULL OR a.id_programa = @idPrograma)
-          AND (@idPractica IS NULL OR p.id_practica_principal = @idPractica)
-          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-      ),
-      clasif AS (
-        SELECT
-          id_asignacion,
-          MAX(sesiones_desde_inicio) AS sesiones_desde_inicio,
-          MAX(fecha_retiro) AS fecha_retiro,
-          MAX(CASE WHEN rn_reciente = 1 AND estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistio_ultima,
-          SUM(CASE WHEN rn_reciente <= 3 AND estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistio_ult3
-        FROM ses_post_inicio
-        GROUP BY id_asignacion
-      ),
-      estados AS (
-        SELECT
-          id_asignacion,
-          CASE
-            WHEN sesiones_desde_inicio < 3 THEN N'NO_EVALUABLE'
-            WHEN fecha_retiro IS NOT NULL AND fecha_retiro <= CAST(@corte AS DATE) THEN N'RETIRADO'
-            WHEN asistio_ultima = 1 THEN N'ACTIVO'
-            WHEN asistio_ult3 >= 1 THEN N'EN_RIESGO'
-            ELSE N'ABANDONO'
-          END AS estado_continuidad
-        FROM clasif
-      )
-      SELECT
-        SUM(CASE WHEN estado_continuidad <> N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS evaluables,
-        SUM(CASE WHEN estado_continuidad IN (N'ACTIVO', N'EN_RIESGO') THEN 1 ELSE 0 END) AS continuan,
-        SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END) AS activos,
-        SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END) AS en_riesgo,
-        SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END) AS abandono,
-        SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END) AS retirados,
-        SUM(CASE WHEN estado_continuidad = N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS no_evaluables
-      FROM estados
-      `,
-      params,
-    );
 
     const cont = contRows[0] || {};
     const evaluables = Number(cont.evaluables || 0);
     const continuan = Number(cont.continuan || 0);
     const tasaContinuidad = evaluables > 0 ? Number(((continuan / evaluables) * 100).toFixed(1)) : null;
 
-    // 3. Cumplimiento de Evaluaciones (KPI-04) al corte C (admite tardías en numerador)
-    const cumpRows = await this.db.query(
-      `
-      SELECT
-        COUNT(*) AS elegibles,
-        SUM(CASE WHEN r.id_resultado IS NOT NULL THEN 1 ELSE 0 END) AS completadas,
-        SUM(CASE WHEN r.id_resultado IS NOT NULL AND r.en_ventana = 1 THEN 1 ELSE 0 END) AS completadas_en_ventana,
-        SUM(CASE WHEN r.id_resultado IS NOT NULL AND r.en_ventana = 0 THEN 1 ELSE 0 END) AS completadas_tardias,
-        SUM(CASE WHEN r.id_resultado IS NULL AND op.fecha_ventana_fin < CAST(@corte AS DATE) THEN 1 ELSE 0 END) AS vencidas,
-        SUM(CASE WHEN r.id_resultado IS NULL AND op.fecha_ventana_fin >= CAST(@corte AS DATE) THEN 1 ELSE 0 END) AS pendientes_en_ventana
-      FROM dbo.oportunidades_evaluacion op
-      JOIN dbo.programas p ON p.id_programa = op.id_programa
-      JOIN dbo.estudiantes e ON e.id_estudiante = op.id_estudiante
-      LEFT JOIN dbo.resultados_evaluacion r
-        ON r.id_oportunidad = op.id_oportunidad
-       AND r.es_vigente = 1 AND r.estado_validez = N'VALIDO'
-       AND r.fecha_realizacion <= CAST(@corte AS DATE)
-      WHERE op.aplicable = 1
-        AND op.fecha_ventana_inicio <= CAST(@corte AS DATE)
-        AND (@idPrograma IS NULL OR op.id_programa = @idPrograma)
-        AND (@idPractica IS NULL OR p.id_practica_principal = @idPractica)
-        AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-      `,
-      params,
-    );
-
     const cump = cumpRows[0] || {};
     const elegibles = Number(cump.elegibles || 0);
     const completadas = Number(cump.completadas || 0);
     const tasaCumplimiento = elegibles > 0 ? Number(((completadas / elegibles) * 100).toFixed(1)) : null;
-
-    // 4. Totales operativos generales
-    const [totales] = await this.db.query(`
-      SELECT
-        (SELECT COUNT(*) FROM dbo.estudiantes) AS total_estudiantes,
-        (SELECT COUNT(*) FROM dbo.programas) AS total_programas,
-        (SELECT COUNT(*) FROM dbo.sesiones WHERE estado_sesion = N'REALIZADA' AND fecha_sesion <= CAST(@corte AS DATE)) AS sesiones_realizadas,
-        (SELECT COUNT(*) FROM dbo.asistencias) AS total_asistencias
-    `, { corte: f.corte });
 
     const pssPares = Number(pssRow?.pares_validos || 0);
     const pssRed = pssPares >= 5 ? Number(pssRow.reduccion_promedio) : null;
@@ -299,8 +308,14 @@ export class AnalyticsService {
     const pclRed = pclPares >= 5 ? Number(pclRow.reduccion_promedio) : null;
 
     return {
-      corte: f.corte,
-      totales,
+      corte: fechaAplicada,
+      fuente_datos: 'Data Mart (dm.*)',
+      totales: totalesRows[0] || {
+        total_estudiantes: 0,
+        total_programas: 0,
+        sesiones_realizadas: 0,
+        total_asistencias: 0,
+      },
       kpi01_pss10: {
         pares_validos: pssPares,
         suprimido: pssPares > 0 && pssPares < 5,
@@ -340,6 +355,7 @@ export class AnalyticsService {
         en_riesgo: evaluables >= 5 ? Number(cont.en_riesgo || 0) : null,
         abandono: evaluables >= 5 ? Number(cont.abandono || 0) : null,
         retirados: evaluables >= 5 ? Number(cont.retirados || 0) : null,
+        retirados_evaluables: evaluables >= 5 ? Number(cont.retirados_evaluables || 0) : null,
         no_evaluables: Number(cont.no_evaluables || 0),
         tasa_continuidad: evaluables >= 5 ? tasaContinuidad : null,
         suprimido: evaluables > 0 && evaluables < 5,
@@ -347,6 +363,7 @@ export class AnalyticsService {
         semaforo: this.semaforoContinuidad(evaluables, tasaContinuidad),
       },
       kpi04_cumplimiento: {
+        oportunidades_abiertas: Number(cump.oportunidades_abiertas || 0),
         elegibles,
         completadas: elegibles >= 5 ? completadas : null,
         completadas_en_ventana: elegibles >= 5 ? Number(cump.completadas_en_ventana || 0) : null,
@@ -375,13 +392,14 @@ export class AnalyticsService {
     page?: number;
     pageSize?: number;
   }) {
+    const { skCorte, fechaAplicada } = await this.resolveCorteDm(f.corte);
     const agruparPor = f.agruparPor ?? 'programa';
     const page = f.page ?? 1;
     const pageSize = f.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
 
     const params: Record<string, any> = {
-      corte: f.corte,
+      skCorte,
       semestre: f.semestre ?? null,
       facultad: f.facultad ?? null,
       idPrograma: f.idPrograma ?? null,
@@ -411,66 +429,51 @@ export class AnalyticsService {
     const baseCte = `
       WITH pares AS (
         SELECT
-          op_ini.codigo_instrumento,
-          ci.version_instrumento,
+          i.codigo_instrumento,
+          i.version_instrumento,
           p.id_programa,
           p.codigo_programa,
           p.estado_programa,
-          cp.codigo_practica,
-          cp.nombre_practica,
+          pr.codigo_practica,
+          pr.nombre_practica,
           e.facultad_o_area,
           e.grupo_etario,
           e.sexo_codificado,
-          r_ini.puntaje_total AS ini_pts,
-          r_fin.puntaje_total AS fin_pts,
-          (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
-        FROM dbo.oportunidades_evaluacion op_ini
-        JOIN dbo.cat_instrumentos ci ON ci.id_instrumento = op_ini.id_instrumento
-        JOIN dbo.resultados_evaluacion r_ini
-          ON r_ini.id_oportunidad = op_ini.id_oportunidad
-         AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
-         AND r_ini.en_ventana = 1 AND r_ini.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.oportunidades_evaluacion op_fin
-          ON op_fin.id_asignacion = op_ini.id_asignacion
-         AND op_fin.id_instrumento = op_ini.id_instrumento
-         AND op_fin.momento = N'FINAL'
-         AND (
-              (op_ini.codigo_instrumento = N'PSS-10' AND op_fin.id_evento_indice IS NULL)
-              OR
-              (op_ini.codigo_instrumento = N'PCL-5' AND op_fin.id_evento_indice = op_ini.id_evento_indice)
-             )
-        JOIN dbo.resultados_evaluacion r_fin
-          ON r_fin.id_oportunidad = op_fin.id_oportunidad
-         AND r_fin.es_vigente = 1 AND r_fin.estado_validez = N'VALIDO'
-         AND r_fin.en_ventana = 1 AND r_fin.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.programas p ON p.id_programa = op_ini.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
-        JOIN dbo.estudiantes e ON e.id_estudiante = op_ini.id_estudiante
-        LEFT JOIN dbo.eventos_indice ev ON ev.id_evento_indice = op_ini.id_evento_indice
-        LEFT JOIN dbo.cat_categorias_evento_indice ce ON ce.id_categoria_evento = ev.id_categoria_evento
-        WHERE op_ini.momento = N'INICIAL'
-          AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
+          h.ParesValidos,
+          h.SumaInicial,
+          h.SumaFinal,
+          h.PuntosReduccion,
+          h.EsReduccion,
+          h.EsSinCambio,
+          h.EsIncremento
+        FROM dm.HechoResultadosEvaluacion h
+        JOIN dm.DimInstrumento  i  ON i.sk_instrumento   = h.sk_instrumento
+        JOIN dm.DimPrograma     p  ON p.sk_programa      = h.sk_programa
+        JOIN dm.DimPractica     pr ON pr.sk_practica     = h.sk_practica
+        JOIN dm.DimEstudiante   e  ON e.sk_estudiante    = h.sk_estudiante
+        JOIN dm.DimEventoIndice ev ON ev.sk_evento_indice = h.sk_evento_indice
+        WHERE h.sk_tiempo_corte = @skCorte
           AND (@semestre IS NULL OR p.periodo_academico = @semestre)
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-          AND (@idPrograma IS NULL OR op_ini.id_programa = @idPrograma)
-          AND (@idPractica IS NULL OR p.id_practica_principal = @idPractica)
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
+          AND (@idPractica IS NULL OR pr.id_practica = @idPractica)
           AND (@grupoEtario IS NULL OR e.grupo_etario = @grupoEtario)
           AND (@sexo IS NULL OR e.sexo_codificado = @sexo)
-          AND (@instrumento IS NULL OR op_ini.codigo_instrumento = @instrumento)
-          AND (@categoriaEvento IS NULL OR ce.codigo_categoria = @categoriaEvento)
+          AND (@instrumento IS NULL OR i.codigo_instrumento = @instrumento)
+          AND (@categoriaEvento IS NULL OR (ev.es_no_aplica = 0 AND ev.codigo_categoria = @categoriaEvento))
       ),
       agrupado AS (
         SELECT
           codigo_instrumento,
           MAX(version_instrumento) AS version_instrumento,
           ${dimSelect},
-          COUNT(*) AS pares_validos,
-          CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
-          CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
-          CAST(AVG(CAST(delta_pts AS FLOAT)) AS DECIMAL(6,2)) AS reduccion_promedio,
-          SUM(CASE WHEN delta_pts > 0 THEN 1 ELSE 0 END) AS disminuyeron,
-          SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
-          SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
+          SUM(CAST(ParesValidos AS INT)) AS pares_validos,
+          CAST(SUM(CAST(SumaInicial AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_inicial,
+          CAST(SUM(CAST(SumaFinal AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_final,
+          CAST(SUM(CAST(PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS reduccion_promedio,
+          SUM(CAST(EsReduccion AS INT)) AS disminuyeron,
+          SUM(CAST(EsSinCambio AS INT)) AS sin_cambio,
+          SUM(CAST(EsIncremento AS INT)) AS aumentaron
         FROM pares
         GROUP BY codigo_instrumento, ${dimGroup}
       )
@@ -482,26 +485,20 @@ export class AnalyticsService {
         ${baseCte}
         SELECT
           codigo_instrumento,
-          COUNT(*) AS pares_validos,
-          CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
-          CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
-          CAST(AVG(CAST(delta_pts AS FLOAT)) AS DECIMAL(6,2)) AS reduccion_promedio,
-          SUM(CASE WHEN delta_pts > 0 THEN 1 ELSE 0 END) AS disminuyeron,
-          SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
-          SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
+          SUM(CAST(ParesValidos AS INT)) AS pares_validos,
+          CAST(SUM(CAST(SumaInicial AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_inicial,
+          CAST(SUM(CAST(SumaFinal AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_final,
+          CAST(SUM(CAST(PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS reduccion_promedio,
+          SUM(CAST(EsReduccion AS INT)) AS disminuyeron,
+          SUM(CAST(EsSinCambio AS INT)) AS sin_cambio,
+          SUM(CAST(EsIncremento AS INT)) AS aumentaron
         FROM pares
         GROUP BY codigo_instrumento
         ORDER BY CASE WHEN codigo_instrumento = N'PSS-10' THEN 1 ELSE 2 END
         `,
         params,
       ),
-      this.db.query(
-        `
-        ${baseCte}
-        SELECT COUNT(*) AS total_registros FROM agrupado
-        `,
-        params,
-      ),
+      this.db.query(`${baseCte} SELECT COUNT(*) AS total_registros FROM agrupado`, params),
       this.db.query(
         `
         ${baseCte}
@@ -541,7 +538,7 @@ export class AnalyticsService {
     const totalRegistros = Number(countRow[0]?.total_registros || 0);
 
     return {
-      corte: f.corte,
+      corte: fechaAplicada,
       agrupar_por: agruparPor,
       totales_por_instrumento: totalesInst.map(mapRow),
       paginacion: {
@@ -560,129 +557,103 @@ export class AnalyticsService {
     semestre?: string;
     facultad?: string;
   }) {
+    const { skCorte, fechaAplicada } = await this.resolveCorteDm(q.corte);
+    const metaPts = q.instrumento === 'PSS-10' ? 4.0 : 10.0;
     const params = {
       instrumento: q.instrumento,
-      corte: q.corte,
+      skCorte,
       semestre: q.semestre ?? null,
       facultad: q.facultad ?? null,
+      facultadVista: q.facultad ?? 'TODAS',
     };
 
-    const metaPts = q.instrumento === 'PSS-10' ? 4.0 : 10.0;
-
-    const porPracticaRaw = await this.db.query(
-      `
-      WITH pares AS (
+    // RG-02: Lee directamente desde dm.vw_HechoEfectividadPractica filtrando por Facultad/Área
+    // ANTES de agrupar por Práctica × Instrumento y exigiendo ParesValidos >= 5.
+    const [porPracticaRaw, porProgramaRaw] = await Promise.all([
+      this.db.query(
+        `
         SELECT
-          cp.id_practica,
-          cp.codigo_practica,
-          cp.nombre_practica,
-          cp.descripcion,
-          cp.es_mixto,
-          r_ini.puntaje_total AS ini_pts,
-          r_fin.puntaje_total AS fin_pts,
-          (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
-        FROM dbo.oportunidades_evaluacion op_ini
-        JOIN dbo.resultados_evaluacion r_ini
-          ON r_ini.id_oportunidad = op_ini.id_oportunidad
-         AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
-         AND r_ini.en_ventana = 1 AND r_ini.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.oportunidades_evaluacion op_fin
-          ON op_fin.id_asignacion = op_ini.id_asignacion
-         AND op_fin.id_instrumento = op_ini.id_instrumento
-         AND op_fin.momento = N'FINAL'
-         AND (
-              (op_ini.codigo_instrumento = N'PSS-10' AND op_fin.id_evento_indice IS NULL)
-              OR
-              (op_ini.codigo_instrumento = N'PCL-5' AND op_fin.id_evento_indice = op_ini.id_evento_indice)
-             )
-        JOIN dbo.resultados_evaluacion r_fin
-          ON r_fin.id_oportunidad = op_fin.id_oportunidad
-         AND r_fin.es_vigente = 1 AND r_fin.estado_validez = N'VALIDO'
-         AND r_fin.en_ventana = 1 AND r_fin.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.programas p ON p.id_programa = op_ini.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
-        JOIN dbo.estudiantes e ON e.id_estudiante = op_ini.id_estudiante
-        WHERE op_ini.momento = N'INICIAL'
-          AND op_ini.codigo_instrumento = @instrumento
-          AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
-          AND (@semestre IS NULL OR p.periodo_academico = @semestre)
-          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-      )
-      SELECT
-        id_practica, codigo_practica, nombre_practica, descripcion, es_mixto,
-        COUNT(*) AS pares_validos,
-        CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
-        CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
-        CAST(AVG(CAST(delta_pts AS FLOAT)) AS DECIMAL(6,2)) AS reduccion_promedio,
-        SUM(CASE WHEN delta_pts > 0 THEN 1 ELSE 0 END) AS disminuyeron,
-        SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
-        SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
-      FROM pares
-      GROUP BY id_practica, codigo_practica, nombre_practica, descripcion, es_mixto
-      ORDER BY reduccion_promedio DESC
-      `,
-      params,
-    );
-
-    const porProgramaRaw = await this.db.query(
-      `
-      WITH pares AS (
+          pr.id_practica,
+          v.codigo_practica,
+          v.nombre_practica,
+          v.tipo_practica,
+          pr.es_mixto,
+          v.ParesValidos        AS pares_validos,
+          v.PromedioInicial     AS promedio_inicial,
+          v.PromedioFinal       AS promedio_final,
+          v.ReduccionPromedio   AS reduccion_promedio,
+          v.EsPracticaEvaluable AS es_evaluable_practica,
+          v.CumpleMetaOperativa AS cumple_meta_vista,
+          v.EstadoSemaforo      AS semaforo_vista,
+          ISNULL(det.disminuyeron, 0) AS disminuyeron,
+          ISNULL(det.sin_cambio, 0)   AS sin_cambio,
+          ISNULL(det.aumentaron, 0)   AS aumentaron
+        FROM dm.vw_HechoEfectividadPractica v
+        JOIN dm.DimPractica pr ON pr.sk_practica = v.sk_practica
+        LEFT JOIN (
+          SELECT
+            h.sk_practica,
+            SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
+            SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
+            SUM(CAST(h.EsIncremento AS INT)) AS aumentaron
+          FROM dm.HechoResultadosEvaluacion h
+          JOIN dm.DimInstrumento i ON i.sk_instrumento = h.sk_instrumento
+          JOIN dm.DimEstudiante  e ON e.sk_estudiante  = h.sk_estudiante
+          JOIN dm.DimPrograma    p ON p.sk_programa    = h.sk_programa
+          WHERE h.sk_tiempo_corte = @skCorte
+            AND i.codigo_instrumento = @instrumento
+            AND (@semestre IS NULL OR p.periodo_academico = @semestre)
+            AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
+          GROUP BY h.sk_practica
+        ) det ON det.sk_practica = v.sk_practica
+        WHERE v.sk_tiempo_corte = @skCorte
+          AND v.codigo_instrumento = @instrumento
+          AND v.facultad_o_area = @facultadVista
+          AND (@semestre IS NULL OR v.periodo_academico = @semestre)
+        ORDER BY
+          CASE WHEN v.ParesValidos >= 5 THEN 0 ELSE 1 END,
+          v.ReduccionPromedio DESC,
+          v.codigo_practica ASC
+        `,
+        params,
+      ),
+      this.db.query(
+        `
         SELECT
           p.id_programa,
           p.codigo_programa,
           p.nombre_programa,
-          cp.codigo_practica,
-          cp.nombre_practica,
+          pr.codigo_practica,
+          pr.nombre_practica,
           p.estado_programa,
-          r_ini.puntaje_total AS ini_pts,
-          r_fin.puntaje_total AS fin_pts,
-          (r_ini.puntaje_total - r_fin.puntaje_total) AS delta_pts
-        FROM dbo.oportunidades_evaluacion op_ini
-        JOIN dbo.resultados_evaluacion r_ini
-          ON r_ini.id_oportunidad = op_ini.id_oportunidad
-         AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
-         AND r_ini.en_ventana = 1 AND r_ini.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.oportunidades_evaluacion op_fin
-          ON op_fin.id_asignacion = op_ini.id_asignacion
-         AND op_fin.id_instrumento = op_ini.id_instrumento
-         AND op_fin.momento = N'FINAL'
-         AND (
-              (op_ini.codigo_instrumento = N'PSS-10' AND op_fin.id_evento_indice IS NULL)
-              OR
-              (op_ini.codigo_instrumento = N'PCL-5' AND op_fin.id_evento_indice = op_ini.id_evento_indice)
-             )
-        JOIN dbo.resultados_evaluacion r_fin
-          ON r_fin.id_oportunidad = op_fin.id_oportunidad
-         AND r_fin.es_vigente = 1 AND r_fin.estado_validez = N'VALIDO'
-         AND r_fin.en_ventana = 1 AND r_fin.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.programas p ON p.id_programa = op_ini.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
-        JOIN dbo.estudiantes e ON e.id_estudiante = op_ini.id_estudiante
-        WHERE op_ini.momento = N'INICIAL'
-          AND op_ini.codigo_instrumento = @instrumento
-          AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
+          SUM(CAST(h.ParesValidos AS INT)) AS pares_validos,
+          CAST(SUM(CAST(h.SumaInicial AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_inicial,
+          CAST(SUM(CAST(h.SumaFinal AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS promedio_final,
+          CAST(SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) AS reduccion_promedio,
+          SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
+          SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
+          SUM(CAST(h.EsIncremento AS INT)) AS aumentaron
+        FROM dm.HechoResultadosEvaluacion h
+        JOIN dm.DimInstrumento i  ON i.sk_instrumento = h.sk_instrumento
+        JOIN dm.DimPrograma    p  ON p.sk_programa    = h.sk_programa
+        JOIN dm.DimPractica    pr ON pr.sk_practica   = h.sk_practica
+        JOIN dm.DimEstudiante  e  ON e.sk_estudiante  = h.sk_estudiante
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND i.codigo_instrumento = @instrumento
           AND (@semestre IS NULL OR p.periodo_academico = @semestre)
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-      )
-      SELECT
-        id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica, estado_programa,
-        COUNT(*) AS pares_validos,
-        CAST(AVG(CAST(ini_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_inicial,
-        CAST(AVG(CAST(fin_pts AS FLOAT)) AS DECIMAL(6,2)) AS promedio_final,
-        CAST(AVG(CAST(delta_pts AS FLOAT)) AS DECIMAL(6,2)) AS reduccion_promedio,
-        SUM(CASE WHEN delta_pts > 0 THEN 1 ELSE 0 END) AS disminuyeron,
-        SUM(CASE WHEN delta_pts = 0 THEN 1 ELSE 0 END) AS sin_cambio,
-        SUM(CASE WHEN delta_pts < 0 THEN 1 ELSE 0 END) AS aumentaron
-      FROM pares
-      GROUP BY id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica, estado_programa
-      ORDER BY reduccion_promedio DESC
-      `,
-      params,
-    );
+        GROUP BY p.id_programa, p.codigo_programa, p.nombre_programa, pr.codigo_practica, pr.nombre_practica, p.estado_programa
+        ORDER BY
+          CASE WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5 THEN 0 ELSE 1 END,
+          CAST(SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(6,2)) DESC
+        `,
+        params,
+      ),
+    ]);
 
     const mapRow = (r: any) => {
       const n = Number(r.pares_validos || 0);
-      const red = n >= 5 ? Number(r.reduccion_promedio) : null;
+      const red = n >= 5 && r.reduccion_promedio !== null ? Number(r.reduccion_promedio) : null;
       const sem =
         q.instrumento === 'PSS-10' ? this.semaforoPss(n, red) : this.semaforoPcl(n, red);
       const cumpleMeta = red !== null ? red >= metaPts : null;
@@ -690,8 +661,8 @@ export class AnalyticsService {
         ...r,
         pares_validos: n,
         suprimido: n > 0 && n < 5,
-        promedio_inicial: n >= 5 ? Number(r.promedio_inicial) : null,
-        promedio_final: n >= 5 ? Number(r.promedio_final) : null,
+        promedio_inicial: n >= 5 && r.promedio_inicial !== null ? Number(r.promedio_inicial) : null,
+        promedio_final: n >= 5 && r.promedio_final !== null ? Number(r.promedio_final) : null,
         reduccion_promedio: red,
         disminuyeron: n >= 5 ? Number(r.disminuyeron) : null,
         sin_cambio: n >= 5 ? Number(r.sin_cambio) : null,
@@ -712,7 +683,8 @@ export class AnalyticsService {
 
     return {
       instrumento: q.instrumento,
-      corte: q.corte,
+      corte: fechaAplicada,
+      facultad: q.facultad ?? 'TODAS',
       meta_operativa_pts: metaPts,
       kpi05_meta_practicas: {
         practicas_evaluables: practicasEvaluables,
@@ -738,12 +710,13 @@ export class AnalyticsService {
     page?: number;
     pageSize?: number;
   }) {
+    const { skCorte, fechaAplicada } = await this.resolveCorteDm(f.corte);
     const page = f.page ?? 1;
     const pageSize = f.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
 
     const params = {
-      corte: f.corte,
+      skCorte,
       semestre: f.semestre ?? null,
       idPrograma: f.idPrograma ?? null,
       idPractica: f.idPractica ?? null,
@@ -756,88 +729,41 @@ export class AnalyticsService {
     };
 
     const baseCte = `
-      WITH ses_corte AS (
-        SELECT id_sesion, id_programa, fecha_sesion, numero_sesion
-        FROM dbo.sesiones
-        WHERE estado_sesion = N'REALIZADA' AND fecha_sesion <= CAST(@corte AS DATE)
-      ),
-      primera_asis AS (
-        SELECT asis.id_asignacion, MIN(sc.fecha_sesion) AS fecha_primera
-        FROM dbo.asistencias asis
-        JOIN ses_corte sc ON sc.id_sesion = asis.id_sesion
-        WHERE asis.estado_asistencia = N'ASISTIO'
-        GROUP BY asis.id_asignacion
-      ),
-      ses_post AS (
+      WITH filtrado AS (
         SELECT
-          a.id_asignacion, a.id_estudiante, a.id_programa, a.fecha_retiro,
-          pa.fecha_primera,
-          sc.id_sesion, sc.fecha_sesion, asis.estado_asistencia,
-          ROW_NUMBER() OVER (PARTITION BY a.id_asignacion ORDER BY sc.fecha_sesion DESC, sc.numero_sesion DESC) AS rn_reciente,
-          COUNT(*) OVER (PARTITION BY a.id_asignacion) AS sesiones_exigibles
-        FROM dbo.asignaciones a
-        JOIN dbo.programas p ON p.id_programa = a.id_programa
-        JOIN primera_asis pa ON pa.id_asignacion = a.id_asignacion
-        JOIN ses_corte sc ON sc.id_programa = a.id_programa AND sc.fecha_sesion >= pa.fecha_primera
-        LEFT JOIN dbo.asistencias asis ON asis.id_asignacion = a.id_asignacion AND asis.id_sesion = sc.id_sesion
-        WHERE (@semestre IS NULL OR p.periodo_academico = @semestre)
-          AND (@idPrograma IS NULL OR a.id_programa = @idPrograma)
-          AND (@idPractica IS NULL OR p.id_practica_principal = @idPractica)
-      ),
-      clasif AS (
-        SELECT
-          id_asignacion, id_estudiante, id_programa,
-          MAX(sesiones_exigibles) AS sesiones_exigibles,
-          SUM(CASE WHEN estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistencias,
-          SUM(CASE WHEN estado_asistencia = N'INASISTENCIA' THEN 1 ELSE 0 END) AS inasistencias,
-          MIN(fecha_primera) AS primera_asistencia,
-          MAX(CASE WHEN estado_asistencia = N'ASISTIO' THEN fecha_sesion END) AS ultima_asistencia,
-          MAX(fecha_retiro) AS fecha_retiro,
-          MAX(CASE WHEN rn_reciente = 1 AND estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistio_ultima,
-          SUM(CASE WHEN rn_reciente <= 3 AND estado_asistencia = N'ASISTIO' THEN 1 ELSE 0 END) AS asistio_ult3
-        FROM ses_post
-        GROUP BY id_asignacion, id_estudiante, id_programa
-      ),
-      estados AS (
-        SELECT
-          c.id_asignacion,
-          c.id_estudiante,
-          c.id_programa,
-          c.sesiones_exigibles,
-          c.asistencias,
-          c.inasistencias,
-          c.primera_asistencia,
-          c.ultima_asistencia,
-          c.fecha_retiro,
-          CASE WHEN c.sesiones_exigibles >= 3 THEN 1 ELSE 0 END AS es_evaluable,
-          CAST(ROUND((CAST(c.asistencias AS FLOAT) / NULLIF(c.sesiones_exigibles, 0)) * 100.0, 1) AS DECIMAL(5,1)) AS asistencia_pct,
-          CASE
-            WHEN c.sesiones_exigibles < 3 THEN N'NO_EVALUABLE'
-            WHEN c.fecha_retiro IS NOT NULL AND c.fecha_retiro <= CAST(@corte AS DATE) THEN N'RETIRADO'
-            WHEN c.asistio_ultima = 1 THEN N'ACTIVO'
-            WHEN c.asistio_ult3 >= 1 THEN N'EN_RIESGO'
-            ELSE N'ABANDONO'
-          END AS estado_continuidad
-        FROM clasif c
-      ),
-      filtrado AS (
-        SELECT
-          e.*,
-          es.codigo_anonimizado,
-          es.facultad_o_area,
-          es.ciclo_academico,
+          h.id_asignacion,
+          e.codigo_anonimizado,
+          e.facultad_o_area,
+          e.ciclo_academico,
+          p.id_programa,
           p.codigo_programa,
           p.nombre_programa,
-          cp.codigo_practica,
-          cp.nombre_practica
-        FROM estados e
-        JOIN dbo.estudiantes es ON es.id_estudiante = e.id_estudiante
-        JOIN dbo.programas p ON p.id_programa = e.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
-        WHERE (@estado IS NULL OR e.estado_continuidad = @estado)
-          AND (@facultad IS NULL OR es.facultad_o_area = @facultad)
-          AND (@ciclo IS NULL OR es.ciclo_academico = @ciclo)
-          AND (@buscar IS NULL OR es.codigo_anonimizado LIKE @buscar)
+          pr.codigo_practica,
+          pr.nombre_practica,
+          h.SesionesExigibles AS sesiones_exigibles,
+          h.Asistencias       AS asistencias,
+          h.Inasistencias     AS inasistencias,
+          CAST(ROUND((CAST(h.Asistencias AS FLOAT) / NULLIF(h.SesionesExigibles, 0)) * 100.0, 1) AS DECIMAL(5,1)) AS asistencia_pct,
+          h.fecha_primera_asistencia AS primera_asistencia,
+          h.fecha_ultima_asistencia  AS ultima_asistencia,
+          h.EsEvaluable       AS es_evaluable,
+          h.Continua          AS continua,
+          ec.codigo_estado    AS estado_continuidad,
+          ec.nombre_estado    AS nombre_estado_continuidad,
+          ec.orden_visual
+        FROM dm.HechoContinuidad h
+        JOIN dm.DimEstudiante        e  ON e.sk_estudiante          = h.sk_estudiante
+        JOIN dm.DimPrograma          p  ON p.sk_programa            = h.sk_programa
+        JOIN dm.DimPractica          pr ON pr.sk_practica           = h.sk_practica
+        JOIN dm.DimEstadoContinuidad ec ON ec.sk_estado_continuidad = h.sk_estado_continuidad
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND (@semestre IS NULL OR p.periodo_academico = @semestre)
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
+          AND (@idPractica IS NULL OR pr.id_practica = @idPractica)
+          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
+          AND (@ciclo IS NULL OR e.ciclo_academico = @ciclo)
+          AND (@estado IS NULL OR ec.codigo_estado = @estado)
+          AND (@buscar IS NULL OR e.codigo_anonimizado LIKE @buscar)
       )
     `;
 
@@ -846,16 +772,16 @@ export class AnalyticsService {
         `${baseCte}
         SELECT
           COUNT(*) AS total_registros,
-          SUM(CASE WHEN estado_continuidad <> N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS evaluables,
-          SUM(CASE WHEN estado_continuidad IN (N'ACTIVO', N'EN_RIESGO') THEN 1 ELSE 0 END) AS continuan,
+          ISNULL(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
+          ISNULL(SUM(CAST(continua AS INT)), 0) AS continuan,
           ISNULL(SUM(sesiones_exigibles), 0) AS sesiones_exigibles,
           ISNULL(SUM(asistencias), 0) AS asistencias,
           ISNULL(SUM(inasistencias), 0) AS inasistencias,
-          SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END) AS activos,
-          SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END) AS en_riesgo,
-          SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END) AS abandono,
-          SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END) AS retirados,
-          SUM(CASE WHEN estado_continuidad = N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS no_evaluables
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          ISNULL(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
         FROM filtrado`,
         params,
       ),
@@ -875,7 +801,6 @@ export class AnalyticsService {
           asistencia_pct,
           CONVERT(VARCHAR(10), primera_asistencia, 23) AS primera_asistencia,
           CONVERT(VARCHAR(10), ultima_asistencia, 23) AS ultima_asistencia,
-          CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro,
           es_evaluable,
           estado_continuidad
         FROM filtrado
@@ -895,13 +820,13 @@ export class AnalyticsService {
         `${baseCte}
         SELECT
           id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica,
-          SUM(CASE WHEN estado_continuidad <> N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS evaluables,
-          SUM(CASE WHEN estado_continuidad IN (N'ACTIVO', N'EN_RIESGO') THEN 1 ELSE 0 END) AS continuan,
-          SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END) AS activos,
-          SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END) AS en_riesgo,
-          SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END) AS abandono,
-          SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END) AS retirados,
-          SUM(CASE WHEN estado_continuidad = N'NO_EVALUABLE' THEN 1 ELSE 0 END) AS no_evaluables
+          ISNULL(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
+          ISNULL(SUM(CAST(continua AS INT)), 0) AS continuan,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          ISNULL(SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          ISNULL(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
         FROM filtrado
         GROUP BY id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica
         ORDER BY id_programa`,
@@ -921,7 +846,7 @@ export class AnalyticsService {
       evaluables > 0 ? Number(((continuan / evaluables) * 100).toFixed(1)) : null;
 
     return {
-      corte: f.corte,
+      corte: fechaAplicada,
       resumen_total: {
         total_registros: totalRegistros,
         evaluables,
@@ -977,12 +902,13 @@ export class AnalyticsService {
     page?: number;
     pageSize?: number;
   }) {
+    const { skCorte, fechaAplicada } = await this.resolveCorteDm(f.corte);
     const page = f.page ?? 1;
     const pageSize = f.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
 
     const params: Record<string, any> = {
-      corte: f.corte,
+      skCorte,
       semestre: f.semestre ?? null,
       idPrograma: f.idPrograma ?? null,
       facultad: f.facultad ?? null,
@@ -995,93 +921,60 @@ export class AnalyticsService {
     };
 
     const baseCte = `
-      WITH pares_validos AS (
+      WITH filtrado AS (
         SELECT
-          op_ini.id_asignacion,
-          op_ini.id_instrumento,
-          op_ini.id_evento_indice
-        FROM dbo.oportunidades_evaluacion op_ini
-        JOIN dbo.resultados_evaluacion r_ini
-          ON r_ini.id_oportunidad = op_ini.id_oportunidad
-         AND r_ini.es_vigente = 1 AND r_ini.estado_validez = N'VALIDO'
-         AND r_ini.en_ventana = 1 AND r_ini.fecha_realizacion <= CAST(@corte AS DATE)
-        JOIN dbo.oportunidades_evaluacion op_fin
-          ON op_fin.id_asignacion = op_ini.id_asignacion
-         AND op_fin.id_instrumento = op_ini.id_instrumento
-         AND op_fin.momento = N'FINAL'
-         AND (
-              (op_ini.codigo_instrumento = N'PSS-10' AND op_fin.id_evento_indice IS NULL)
-              OR
-              (op_ini.codigo_instrumento = N'PCL-5' AND op_fin.id_evento_indice = op_ini.id_evento_indice)
-             )
-        JOIN dbo.resultados_evaluacion r_fin
-          ON r_fin.id_oportunidad = op_fin.id_oportunidad
-         AND r_fin.es_vigente = 1 AND r_fin.estado_validez = N'VALIDO'
-         AND r_fin.en_ventana = 1 AND r_fin.fecha_realizacion <= CAST(@corte AS DATE)
-        WHERE op_ini.momento = N'INICIAL'
-          AND op_ini.aplicable = 1 AND op_fin.aplicable = 1
-      ),
-      op_detalle AS (
-        SELECT
-          op.id_oportunidad,
-          op.id_asignacion,
-          op.id_programa,
+          h.id_oportunidad,
+          p.id_programa,
           e.codigo_anonimizado,
           e.facultad_o_area,
           p.codigo_programa,
           p.periodo_academico,
-          cp.codigo_practica,
-          op.codigo_instrumento,
-          op.momento,
-          ev.codigo_evento_local,
-          ce.codigo_categoria AS categoria_evento,
-          CONVERT(VARCHAR(10), op.fecha_ventana_inicio, 23) AS fecha_ventana_inicio,
-          CONVERT(VARCHAR(10), op.fecha_ventana_fin, 23) AS fecha_ventana_fin,
-          CONVERT(VARCHAR(10), r.fecha_realizacion, 23) AS fecha_realizacion,
-          r.puntaje_total,
-          r.numero_version,
-          CASE
-            WHEN r.id_resultado IS NOT NULL AND r.en_ventana = 1 THEN N'COMPLETADA_EN_VENTANA'
-            WHEN r.id_resultado IS NOT NULL AND r.en_ventana = 0 THEN N'COMPLETADA_TARDIA'
-            WHEN r.id_resultado IS NULL AND op.fecha_ventana_fin < CAST(@corte AS DATE) THEN N'VENCIDA'
-            ELSE N'PENDIENTE_EN_VENTANA'
-          END AS estado_evaluacion,
+          pr.codigo_practica,
+          i.codigo_instrumento,
+          m.codigo_momento AS momento,
+          CASE WHEN ev.es_no_aplica = 1 THEN NULL ELSE ev.codigo_evento_local END AS codigo_evento_local,
+          CASE WHEN ev.es_no_aplica = 1 THEN NULL ELSE ev.codigo_categoria END AS categoria_evento,
+          CONVERT(VARCHAR(10), tp.fecha, 23) AS fecha_prevista,
+          CONVERT(VARCHAR(10), tr.fecha, 23) AS fecha_realizacion,
+          h.PuntajeObtenido AS puntaje_total,
+          h.NumeroVersion   AS numero_version,
+          ee.codigo_estado  AS estado_evaluacion,
+          h.EsElegible      AS es_elegible,
+          h.EsCompletadaElegible AS es_completada_elegible,
+          h.EsEnVentana,
+          h.EsTardia,
+          h.EsPendiente,
+          h.EsVencida,
           CASE
             WHEN EXISTS (
-              SELECT 1 FROM pares_validos pv
-              WHERE pv.id_asignacion = op.id_asignacion
-                AND pv.id_instrumento = op.id_instrumento
-                AND (
-                     (op.codigo_instrumento = N'PSS-10' AND pv.id_evento_indice IS NULL)
-                     OR
-                     (op.codigo_instrumento = N'PCL-5' AND pv.id_evento_indice = op.id_evento_indice)
-                    )
+              SELECT 1
+              FROM dm.HechoResultadosEvaluacion hr
+              WHERE hr.sk_tiempo_corte  = h.sk_tiempo_corte
+                AND hr.sk_estudiante    = h.sk_estudiante
+                AND hr.sk_programa      = h.sk_programa
+                AND hr.sk_instrumento   = h.sk_instrumento
+                AND hr.sk_evento_indice = h.sk_evento_indice
             ) THEN CAST(1 AS BIT)
             ELSE CAST(0 AS BIT)
           END AS par_valido
-        FROM dbo.oportunidades_evaluacion op
-        JOIN dbo.estudiantes e ON e.id_estudiante = op.id_estudiante
-        JOIN dbo.programas p ON p.id_programa = op.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = p.id_practica_principal
-        LEFT JOIN dbo.eventos_indice ev ON ev.id_evento_indice = op.id_evento_indice
-        LEFT JOIN dbo.cat_categorias_evento_indice ce ON ce.id_categoria_evento = ev.id_categoria_evento
-        LEFT JOIN dbo.resultados_evaluacion r
-          ON r.id_oportunidad = op.id_oportunidad
-         AND r.es_vigente = 1 AND r.estado_validez = N'VALIDO'
-         AND r.fecha_realizacion <= CAST(@corte AS DATE)
-        WHERE op.aplicable = 1
-          AND op.fecha_ventana_inicio <= CAST(@corte AS DATE)
+        FROM dm.HechoCumplimientoEvaluaciones h
+        JOIN dm.DimEstudiante       e  ON e.sk_estudiante        = h.sk_estudiante
+        JOIN dm.DimPrograma         p  ON p.sk_programa          = h.sk_programa
+        JOIN dm.DimPractica         pr ON pr.sk_practica         = h.sk_practica
+        JOIN dm.DimInstrumento      i  ON i.sk_instrumento       = h.sk_instrumento
+        JOIN dm.DimEventoIndice     ev ON ev.sk_evento_indice    = h.sk_evento_indice
+        JOIN dm.DimMomento          m  ON m.sk_momento           = h.sk_momento
+        JOIN dm.DimEstadoEvaluacion ee ON ee.sk_estado_evaluacion = h.sk_estado_evaluacion
+        JOIN dm.DimTiempo           tp ON tp.sk_tiempo           = h.sk_tiempo_previsto
+        JOIN dm.DimTiempo           tr ON tr.sk_tiempo           = h.sk_tiempo_realizacion
+        WHERE h.sk_tiempo_corte = @skCorte
           AND (@semestre IS NULL OR p.periodo_academico = @semestre)
-          AND (@idPrograma IS NULL OR op.id_programa = @idPrograma)
+          AND (@idPrograma IS NULL OR p.id_programa = @idPrograma)
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-          AND (@instrumento IS NULL OR op.codigo_instrumento = @instrumento)
-          AND (@categoriaEvento IS NULL OR ce.codigo_categoria = @categoriaEvento)
+          AND (@instrumento IS NULL OR i.codigo_instrumento = @instrumento)
+          AND (@categoriaEvento IS NULL OR (ev.es_no_aplica = 0 AND ev.codigo_categoria = @categoriaEvento))
+          AND (@estado IS NULL OR ee.codigo_estado = @estado)
           AND (@buscar IS NULL OR e.codigo_anonimizado LIKE @buscar OR e.facultad_o_area LIKE @buscar)
-      ),
-      filtrado AS (
-        SELECT *
-        FROM op_detalle
-        WHERE (@estado IS NULL OR estado_evaluacion = @estado)
       )
     `;
 
@@ -1091,11 +984,13 @@ export class AnalyticsService {
         ${baseCte}
         SELECT
           COUNT(*) AS total_registros,
-          SUM(CASE WHEN estado_evaluacion = N'COMPLETADA_EN_VENTANA' THEN 1 ELSE 0 END) AS completadas_en_ventana,
-          SUM(CASE WHEN estado_evaluacion = N'COMPLETADA_TARDIA' THEN 1 ELSE 0 END) AS completadas_tardias,
-          SUM(CASE WHEN estado_evaluacion = N'PENDIENTE_EN_VENTANA' THEN 1 ELSE 0 END) AS pendientes_en_ventana,
-          SUM(CASE WHEN estado_evaluacion = N'VENCIDA' THEN 1 ELSE 0 END) AS vencidas,
-          SUM(CASE WHEN par_valido = 1 THEN 1 ELSE 0 END) AS en_par_valido
+          ISNULL(SUM(CAST(es_elegible AS INT)), 0) AS elegibles,
+          ISNULL(SUM(CAST(es_completada_elegible AS INT)), 0) AS elegibles_completadas,
+          ISNULL(SUM(CAST(EsEnVentana AS INT)), 0) AS completadas_en_ventana,
+          ISNULL(SUM(CAST(EsTardia AS INT)), 0) AS completadas_tardias,
+          ISNULL(SUM(CAST(EsPendiente AS INT)), 0) AS pendientes_en_ventana,
+          ISNULL(SUM(CAST(EsVencida AS INT)), 0) AS vencidas,
+          ISNULL(SUM(CASE WHEN par_valido = 1 THEN 1 ELSE 0 END), 0) AS en_par_valido
         FROM filtrado
         `,
         params,
@@ -1118,28 +1013,30 @@ export class AnalyticsService {
 
     const t = totalesRow[0] || {};
     const totalRegistros = Number(t.total_registros || 0);
+    const elegibles = Number(t.elegibles || 0);
+    const elegiblesCompletadas = Number(t.elegibles_completadas || 0);
     const enVentana = Number(t.completadas_en_ventana || 0);
     const tardias = Number(t.completadas_tardias || 0);
-    const totalCompletadas = enVentana + tardias;
     const pendientes = Number(t.pendientes_en_ventana || 0);
     const vencidas = Number(t.vencidas || 0);
     const tasaCumplimiento =
-      totalRegistros > 0 ? Number(((totalCompletadas / totalRegistros) * 100).toFixed(1)) : null;
+      elegibles > 0 ? Number(((elegiblesCompletadas / elegibles) * 100).toFixed(1)) : null;
 
     return {
-      corte: f.corte,
+      corte: fechaAplicada,
       resumen_total: {
         total_registros: totalRegistros,
-        elegibles: totalRegistros,
+        elegibles,
+        elegibles_completadas: elegiblesCompletadas,
         completadas_en_ventana: enVentana,
         completadas_tardias: tardias,
-        total_completadas: totalCompletadas,
+        total_completadas: enVentana + tardias,
         pendientes_en_ventana: pendientes,
         vencidas,
         en_par_valido: Number(t.en_par_valido || 0),
-        tasa_cumplimiento: totalRegistros >= 5 ? tasaCumplimiento : null,
-        suprimido: totalRegistros > 0 && totalRegistros < 5,
-        semaforo: this.semaforoCumplimiento(totalRegistros, tasaCumplimiento),
+        tasa_cumplimiento: elegibles >= 5 ? tasaCumplimiento : null,
+        suprimido: elegibles > 0 && elegibles < 5,
+        semaforo: this.semaforoCumplimiento(elegibles, tasaCumplimiento),
       },
       paginacion: {
         page,
@@ -1149,6 +1046,8 @@ export class AnalyticsService {
       },
       oportunidades: oportunidadesRows.map((r) => ({
         ...r,
+        es_elegible: Boolean(r.es_elegible),
+        es_completada_elegible: Boolean(r.es_completada_elegible),
         par_valido: Boolean(r.par_valido),
       })),
     };
