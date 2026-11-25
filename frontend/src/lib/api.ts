@@ -226,6 +226,39 @@ export interface EventoIndiceOltpRow {
   creado_en: string;
 }
 
+export type EstadoAsistenciaOltp = 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA' | 'PENDIENTE';
+
+export interface ParticipanteSesionRow {
+  id_asignacion: number;
+  id_estudiante: number;
+  codigo_estudiante: string;
+  nombres: string;
+  apellidos: string;
+  facultad_o_area: string;
+  carrera: string;
+  estado_asignacion: string;
+  fecha_retiro: string | null;
+  estado: EstadoAsistenciaOltp;
+  minutos_asistidos: number | null;
+}
+
+export interface ParticipantesSesionResponse {
+  sesion: {
+    id_sesion: number;
+    id_programa: number;
+    codigo_programa: string;
+    nombre_programa: string;
+    numero_sesion: number;
+    codigo_practica: string;
+    nombre_practica: string;
+    modalidad: string;
+    duracion_programada_min: number;
+    fecha_sesion: string;
+    estado_sesion: string;
+  };
+  participantes: ParticipanteSesionRow[];
+}
+
 export const api = {
   login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
   logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
@@ -325,14 +358,26 @@ export const api = {
     requiere_derivacion?: boolean;
   }) => apiPost<{ ok: boolean; mensaje: string; evento: EventoIndiceOltpRow }>('/operacion/eventos-indice', body),
   getSesiones: (id_programa?: string) => apiGet<any[]>('/operacion/sesiones', { id_programa }),
+  getParticipantesSesion: (idSesion: number) =>
+    apiGet<ParticipantesSesionResponse>(`/operacion/sesiones/${idSesion}/participantes`),
   getOportunidadesAbiertas: (id_programa?: string) =>
     apiGet<any[]>('/operacion/oportunidades-abiertas', { id_programa }),
   registrarAsistencia: (body: {
     id_asignacion: number;
     id_sesion: number;
-    estado_asistencia: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+    estado?: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+    estado_asistencia?: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+    minutos?: number;
     minutos_asistidos?: number;
-  }) => apiPost<{ ok: boolean; mensaje: string }>('/operacion/asistencias', body),
+  }) =>
+    apiPost<{
+      ok: boolean;
+      mensaje: string;
+      estado: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+      minutos_asistidos: number;
+      estado_asignacion: string;
+      fecha_retiro: string | null;
+    }>('/operacion/asistencias', body),
   crearSesion: (body: {
     id_programa: number;
     numero_sesion: number;

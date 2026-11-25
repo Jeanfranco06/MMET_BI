@@ -494,7 +494,7 @@ export class OperacionService {
   async getSesiones(idPrograma?: number) {
     return this.db.query(
       `
-      SELECT TOP 60
+      SELECT TOP 200
         s.id_sesion,
         s.id_programa,
         p.codigo_programa,
@@ -515,6 +515,83 @@ export class OperacionService {
       `,
       { idPrograma: idPrograma ?? null },
     );
+  }
+
+  async getParticipantesSesion(idSesion: number) {
+    const sesRows = await this.db.query<any>(
+      `
+      SELECT
+        s.id_sesion,
+        s.id_programa,
+        p.codigo_programa,
+        p.nombre_programa,
+        s.numero_sesion,
+        cp.codigo_practica,
+        cp.nombre_practica,
+        s.modalidad,
+        s.duracion_programada_min,
+        CONVERT(VARCHAR(10), s.fecha_sesion, 23) AS fecha_sesion,
+        s.estado_sesion
+      FROM dbo.sesiones s
+      JOIN dbo.programas p ON p.id_programa = s.id_programa
+      JOIN dbo.cat_practicas cp ON cp.id_practica = s.id_practica_tecnica
+      WHERE s.id_sesion = @idSesion
+      `,
+      { idSesion },
+    );
+
+    if (!sesRows.length) {
+      throw new NotFoundException(`No existe la sesión con id ${idSesion}.`);
+    }
+
+    const ses = sesRows[0];
+    const rows = await this.db.query<any>(
+      `
+      SELECT
+        asig.id_asignacion,
+        e.id_estudiante,
+        e.codigo_estudiante,
+        e.nombres,
+        e.apellidos,
+        e.facultad_o_area,
+        e.carrera,
+        asig.estado_asignacion,
+        CONVERT(VARCHAR(10), asig.fecha_retiro, 23) AS fecha_retiro,
+        ISNULL(asis.estado_asistencia, N'PENDIENTE') AS estado,
+        asis.minutos_asistidos
+      FROM dbo.asignaciones asig
+      JOIN dbo.estudiantes e ON e.id_estudiante = asig.id_estudiante
+      LEFT JOIN dbo.asistencias asis
+        ON asis.id_asignacion = asig.id_asignacion
+       AND asis.id_sesion = @idSesion
+      WHERE asig.id_programa = @idPrograma
+      ORDER BY e.apellidos ASC, e.nombres ASC, e.codigo_estudiante ASC
+      `,
+      { idSesion, idPrograma: Number(ses.id_programa) },
+    );
+
+    return {
+      sesion: {
+        ...ses,
+        id_sesion: Number(ses.id_sesion),
+        id_programa: Number(ses.id_programa),
+        numero_sesion: Number(ses.numero_sesion),
+        duracion_programada_min: Number(ses.duracion_programada_min),
+      },
+      participantes: rows.map((r) => ({
+        id_asignacion: Number(r.id_asignacion),
+        id_estudiante: Number(r.id_estudiante),
+        codigo_estudiante: r.codigo_estudiante,
+        nombres: r.nombres,
+        apellidos: r.apellidos,
+        facultad_o_area: r.facultad_o_area,
+        carrera: r.carrera,
+        estado_asignacion: r.estado_asignacion,
+        fecha_retiro: r.fecha_retiro || null,
+        estado: r.estado as 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA' | 'PENDIENTE',
+        minutos_asistidos: r.minutos_asistidos != null ? Number(r.minutos_asistidos) : null,
+      })),
+    };
   }
 
   async getOportunidadesAbiertas(idPrograma?: number) {
@@ -551,26 +628,72 @@ export class OperacionService {
   }
 
   async registrarAsistencia(dto: RegistrarAsistenciaDto) {
-    const sesRows = await this.db.query(
-      `SELECT id_sesion, id_programa, estado_sesion, duracion_programada_min FROM dbo.sesiones WHERE id_sesion = @id`,
-      { id: dto.id_sesion },
-    );
+    const estado = dto.estado_asistencia ?? dto.estado;
+    if (!estado) {
+      throw new BadRequestException('Debe indicar el estado de asistencia (ASISTIO, INASISTENCIA o RETIRO_BAJA).');
+    }
+
+    const [sesRows, asigRows] = await Promise.all([
+      this.db.query<any>(
+        `
+        SELECT
+          id_sesion,
+          id_programa,
+          estado_sesion,
+          duracion_programada_min,
+          CONVERT(VARCHAR(10), fecha_sesion, 23) AS fecha_sesion
+        FROM dbo.sesiones
+        WHERE id_sesion = @id
+        `,
+        { id: dto.id_sesion },
+      ),
+      this.db.query<any>(
+        `
+        SELECT
+          id_asignacion,
+          id_programa,
+          estado_asignacion,
+          CONVERT(VARCHAR(10), fecha_inscripcion, 23) AS fecha_inscripcion,
+          CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro
+        FROM dbo.asignaciones
+        WHERE id_asignacion = @idAsig
+        `,
+        { idAsig: dto.id_asignacion },
+      ),
+    ]);
+
     if (!sesRows.length) throw new BadRequestException('La sesión no existe.');
+    if (!asigRows.length) throw new BadRequestException('La inscripción del estudiante no existe.');
+
     const ses = sesRows[0];
-    if (ses.estado_sesion !== 'REALIZADA' && dto.estado_asistencia !== 'RETIRO_BAJA') {
+    const asig = asigRows[0];
+
+    if (Number(ses.id_programa) !== Number(asig.id_programa)) {
+      throw new BadRequestException('La inscripción seleccionada no pertenece al programa de esta sesión.');
+    }
+
+    if (ses.estado_sesion !== 'REALIZADA' && estado !== 'RETIRO_BAJA') {
       throw new BadRequestException(
-        `No se puede registrar ${dto.estado_asistencia} sobre una sesión en estado ${ses.estado_sesion}.`,
+        `No se puede registrar ${estado} sobre una sesión en estado ${ses.estado_sesion}.`,
       );
     }
 
-    const mins =
-      dto.estado_asistencia === 'ASISTIO'
-        ? dto.minutos_asistidos ?? ses.duracion_programada_min
-        : 0;
+    const minutosInput = dto.minutos_asistidos ?? dto.minutos;
+    const mins = estado === 'ASISTIO' ? minutosInput ?? Number(ses.duracion_programada_min) : 0;
 
+    const tx = await this.db.beginTransaction();
     try {
-      await this.db.query(
-        `
+      const req = tx.request();
+      req.input('idProg', Number(ses.id_programa));
+      req.input('idAsig', dto.id_asignacion);
+      req.input('idSes', dto.id_sesion);
+      req.input('estado', estado);
+      req.input('mins', mins);
+      req.input('fechaSes', ses.fecha_sesion);
+
+      const res = await req.query(`
+        SET NOCOUNT ON;
+
         MERGE dbo.asistencias AS target
         USING (SELECT @idAsig AS id_asignacion, @idSes AS id_sesion) AS src
           ON target.id_asignacion = src.id_asignacion AND target.id_sesion = src.id_sesion
@@ -579,20 +702,75 @@ export class OperacionService {
         WHEN NOT MATCHED THEN
           INSERT (id_programa, id_asignacion, id_sesion, estado_asistencia, minutos_asistidos)
           VALUES (@idProg, @idAsig, @idSes, @estado, @mins);
-        `,
-        {
-          idProg: ses.id_programa,
-          idAsig: dto.id_asignacion,
-          idSes: dto.id_sesion,
-          estado: dto.estado_asistencia,
-          mins,
-        },
-      );
+
+        DECLARE @estadoAsigPrev NVARCHAR(20) = (
+          SELECT estado_asignacion FROM dbo.asignaciones WHERE id_asignacion = @idAsig
+        );
+        DECLARE @fechaInsc DATE = (
+          SELECT fecha_inscripcion FROM dbo.asignaciones WHERE id_asignacion = @idAsig
+        );
+        DECLARE @fechaEfectiva DATE = CASE
+          WHEN CAST(@fechaSes AS DATE) >= @fechaInsc THEN CAST(@fechaSes AS DATE)
+          ELSE @fechaInsc
+        END;
+
+        IF @estado = N'RETIRO_BAJA'
+        BEGIN
+          UPDATE dbo.asignaciones
+             SET estado_asignacion    = N'RETIRADO',
+                 fecha_retiro         = ISNULL(fecha_retiro, @fechaEfectiva),
+                 motivo_retiro_codigo = ISNULL(motivo_retiro_codigo, N'RETIRO_EN_SESION'),
+                 actualizado_en       = SYSDATETIMEOFFSET()
+           WHERE id_asignacion = @idAsig;
+
+          IF @estadoAsigPrev <> N'RETIRADO'
+          BEGIN
+            INSERT INTO dbo.historial_estados_asignacion (
+              id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
+            )
+            VALUES (@idAsig, @estadoAsigPrev, N'RETIRADO', @fechaEfectiva, N'RETIRO_EN_SESION');
+          END
+        END
+        ELSE IF @estadoAsigPrev = N'RETIRADO'
+        BEGIN
+          UPDATE dbo.asignaciones
+             SET estado_asignacion    = N'ACTIVO',
+                 fecha_retiro         = NULL,
+                 motivo_retiro_codigo = NULL,
+                 actualizado_en       = SYSDATETIMEOFFSET()
+           WHERE id_asignacion = @idAsig;
+
+          INSERT INTO dbo.historial_estados_asignacion (
+            id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
+          )
+          VALUES (@idAsig, @estadoAsigPrev, N'ACTIVO', @fechaEfectiva, N'REACTIVACION_ASISTENCIA');
+        END
+
+        SELECT
+          estado_asignacion,
+          CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro
+        FROM dbo.asignaciones
+        WHERE id_asignacion = @idAsig;
+      `);
+
+      await tx.commit();
+      const updatedAsig = res.recordset?.[0];
+
+      return {
+        ok: true,
+        mensaje:
+          estado === 'RETIRO_BAJA'
+            ? 'Retiro registrado y fecha de baja actualizada correctamente.'
+            : 'Asistencia registrada correctamente.',
+        estado,
+        minutos_asistidos: mins,
+        estado_asignacion: updatedAsig?.estado_asignacion ?? asig.estado_asignacion,
+        fecha_retiro: updatedAsig?.fecha_retiro ?? null,
+      };
     } catch (err: any) {
+      await tx.rollback();
       throw new BadRequestException(err?.message || 'Error al registrar asistencia en SQL Server.');
     }
-
-    return { ok: true, mensaje: 'Asistencia registrada correctamente.' };
   }
 
   async crearSesion(dto: CrearSesionDto) {

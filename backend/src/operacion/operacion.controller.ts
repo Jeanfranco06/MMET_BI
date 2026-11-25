@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, ParseIntPipe, Post, Query } from '@nestjs/common';
 import {
   IsBoolean,
   IsDateString,
@@ -110,14 +110,25 @@ export class RegistrarAsistenciaDto {
   @IsInt()
   id_sesion: number;
 
+  @IsOptional()
   @IsIn(['ASISTIO', 'INASISTENCIA', 'RETIRO_BAJA'])
-  estado_asistencia: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+  estado_asistencia?: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
+
+  @IsOptional()
+  @IsIn(['ASISTIO', 'INASISTENCIA', 'RETIRO_BAJA'])
+  estado?: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
 
   @IsOptional()
   @IsInt()
   @Min(0)
   @Max(480)
   minutos_asistidos?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(480)
+  minutos?: number;
 }
 
 export class CrearSesionDto {
@@ -237,6 +248,12 @@ export class OperacionController {
   @Roles('ADMIN', 'COORDINACION', 'EVALUACION')
   getSesiones(@Query('id_programa') idPrograma?: string) {
     return this.operacionService.getSesiones(idPrograma ? Number(idPrograma) : undefined);
+  }
+
+  @Get('sesiones/:id/participantes')
+  @Roles('ADMIN', 'COORDINACION', 'EVALUACION')
+  getParticipantesSesion(@Param('id', ParseIntPipe) idSesion: number) {
+    return this.operacionService.getParticipantesSesion(idSesion);
   }
 
   @Post('sesiones')

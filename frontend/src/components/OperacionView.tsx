@@ -1,29 +1,38 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   BookOpen,
   Calendar,
   CalendarPlus,
+  Check,
   CheckCircle2,
   ClipboardCheck,
+  Clock,
   DatabaseZap,
   Edit3,
   GraduationCap,
+  Loader2,
   RefreshCw,
   Search,
   ShieldAlert,
   UserCheck,
+  UserMinus,
   UserPlus,
+  Users,
+  UserX,
   X,
 } from 'lucide-react';
 import {
   api,
   type CategoriaEventoOltp,
+  type EstadoAsistenciaOltp,
   type EstudianteOltpRow,
   type EventoIndiceOltpRow,
   type FiltrosResponse,
+  type ParticipanteSesionRow,
+  type ParticipantesSesionResponse,
 } from '@/lib/api';
 import { ResponsiveTable, type TableColumn } from './ResponsiveTable';
 import { ModalDialog } from './ModalDialog';
@@ -57,8 +66,8 @@ const TAB_HEADER_META: Record<
   asistencias: {
     layer: 'OLTP',
     layerBadge: 'Gestión Operativa',
-    title: 'Registro de Asistencias',
-    description: 'Captura y actualización auditada de asistencia estudiantil por sesión realizada.',
+    title: 'Pase de Lista por Sesión',
+    description: 'Selecciona el programa y la sesión para registrar asistencias, inasistencias o retiros en un clic.',
   },
   sesiones: {
     layer: 'OLTP',
@@ -147,12 +156,17 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
   const [evBusy, setEvBusy] = useState(false);
   const [evStudentHistory, setEvStudentHistory] = useState<EventoIndiceOltpRow[]>([]);
 
-  // 1. Asistencia form
-  const [asisSesionId, setAsisSesionId] = useState<string>('');
-  const [asisAsignacionId, setAsisAsignacionId] = useState<string>('');
-  const [asisEstado, setAsisEstado] = useState<'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA'>('ASISTIO');
-  const [asisMinutos, setAsisMinutos] = useState<string>('45');
-  const [asisBusy, setAsisBusy] = useState(false);
+  // 1. Pase de Lista por Sesión
+  const [paseProgramaId, setPaseProgramaId] = useState<string>('');
+  const [paseSesiones, setPaseSesiones] = useState<any[]>([]);
+  const [paseSesionesLoading, setPaseSesionesLoading] = useState(false);
+  const [paseSesionId, setPaseSesionId] = useState<string>('');
+  const [paseSesionMeta, setPaseSesionMeta] = useState<ParticipantesSesionResponse['sesion'] | null>(null);
+  const [paseParticipantes, setPaseParticipantes] = useState<ParticipanteSesionRow[]>([]);
+  const [paseLoading, setPaseLoading] = useState(false);
+  const [paseBuscar, setPaseBuscar] = useState('');
+  const [savingAsigId, setSavingAsigId] = useState<number | null>(null);
+  const [retiroTarget, setRetiroTarget] = useState<ParticipanteSesionRow | null>(null);
 
   // 2. Nueva sesión modal
   const [sesionModalOpen, setSesionModalOpen] = useState(false);
@@ -374,26 +388,148 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     }
   };
 
-  const handleRegistrarAsistencia = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAsisBusy(true);
+  const cargarParticipantesSesion = async (idSesionNum: number) => {
+    setPaseLoading(true);
     try {
-      const res = await api.registrarAsistencia({
-        id_sesion: Number(asisSesionId),
-        id_asignacion: Number(asisAsignacionId),
-        estado_asistencia: asisEstado,
-        minutos_asistidos: asisEstado === 'ASISTIO' ? Number(asisMinutos) : 0,
-      });
-      showToast('success', res.mensaje);
-      setAsisAsignacionId('');
-      await cargar();
-      onDataMutated();
-    } catch (err: any) {
-      showToast('error', err.message);
+      const res = await api.getParticipantesSesion(idSesionNum);
+      setPaseSesionMeta(res.sesion);
+      setPaseParticipantes(res.participantes);
+    } catch (e: any) {
+      showToast('error', e.message || 'Error al cargar los participantes de la sesión.');
+      setPaseSesionMeta(null);
+      setPaseParticipantes([]);
     } finally {
-      setAsisBusy(false);
+      setPaseLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (activeTab !== 'asistencias' || !canManageSessions) return;
+    if (!paseProgramaId && filtros?.programas?.length) {
+      const preferred =
+        filtros.programas.find((p) => p.estado_programa === 'ACTIVO') || filtros.programas[0];
+      if (preferred) setPaseProgramaId(String(preferred.id_programa));
+    }
+  }, [activeTab, canManageSessions, filtros, paseProgramaId]);
+
+  useEffect(() => {
+    if (activeTab !== 'asistencias' || !canManageSessions || !paseProgramaId) return;
+    let cancelled = false;
+    setPaseSesionesLoading(true);
+    api
+      .getSesiones(paseProgramaId)
+      .then((list) => {
+        if (cancelled) return;
+        setPaseSesiones(list);
+        const realizadas = list.filter((s) => s.estado_sesion === 'REALIZADA');
+        const defaultSes = realizadas.length ? realizadas[realizadas.length - 1] : list[0];
+        if (defaultSes) {
+          setPaseSesionId(String(defaultSes.id_sesion));
+        } else {
+          setPaseSesionId('');
+          setPaseSesionMeta(null);
+          setPaseParticipantes([]);
+        }
+      })
+      .catch((e: any) => {
+        if (!cancelled) {
+          showToast('error', e.message || 'Error al cargar las sesiones del programa.');
+          setPaseSesiones([]);
+          setPaseSesionId('');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPaseSesionesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, canManageSessions, paseProgramaId]);
+
+  useEffect(() => {
+    if (activeTab !== 'asistencias' || !canManageSessions || !paseSesionId) return;
+    cargarParticipantesSesion(Number(paseSesionId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, canManageSessions, paseSesionId]);
+
+  const handleMarcarAsistencia = async (
+    part: ParticipanteSesionRow,
+    nuevoEstado: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA',
+  ) => {
+    if (!paseSesionId) return;
+    setSavingAsigId(part.id_asignacion);
+    const minutos =
+      nuevoEstado === 'ASISTIO' ? paseSesionMeta?.duracion_programada_min ?? 45 : 0;
+    try {
+      const res = await api.registrarAsistencia({
+        id_asignacion: part.id_asignacion,
+        id_sesion: Number(paseSesionId),
+        estado: nuevoEstado,
+        minutos,
+      });
+      setPaseParticipantes((prev) =>
+        prev.map((row) =>
+          row.id_asignacion === part.id_asignacion
+            ? {
+                ...row,
+                estado: res.estado,
+                minutos_asistidos: res.minutos_asistidos,
+                estado_asignacion: res.estado_asignacion,
+                fecha_retiro: res.fecha_retiro,
+              }
+            : row,
+        ),
+      );
+      const etiquetaEstado =
+        nuevoEstado === 'ASISTIO'
+          ? `Asistió (${res.minutos_asistidos} min)`
+          : nuevoEstado === 'INASISTENCIA'
+            ? 'Inasistencia'
+            : 'Retiro / Baja';
+      showToast(
+        'success',
+        `${part.apellidos}, ${part.nombres} (${part.codigo_estudiante}) → ${etiquetaEstado}.`,
+      );
+      onDataMutated();
+    } catch (err: any) {
+      showToast('error', err.message || 'No se pudo guardar la asistencia.');
+    } finally {
+      setSavingAsigId(null);
+    }
+  };
+
+  const handleConfirmarRetiro = async () => {
+    if (!retiroTarget) return;
+    const target = retiroTarget;
+    setRetiroTarget(null);
+    await handleMarcarAsistencia(target, 'RETIRO_BAJA');
+  };
+
+  const paseResumen = useMemo(() => {
+    let asistieron = 0;
+    let inasistencias = 0;
+    let retiros = 0;
+    let pendientes = 0;
+    for (const p of paseParticipantes) {
+      if (p.estado === 'ASISTIO') asistieron += 1;
+      else if (p.estado === 'INASISTENCIA') inasistencias += 1;
+      else if (p.estado === 'RETIRO_BAJA') retiros += 1;
+      else pendientes += 1;
+    }
+    return { asistieron, inasistencias, retiros, pendientes, total: paseParticipantes.length };
+  }, [paseParticipantes]);
+
+  const participantesFiltrados = useMemo(() => {
+    const q = paseBuscar.trim().toLowerCase();
+    if (!q) return paseParticipantes;
+    return paseParticipantes.filter(
+      (p) =>
+        p.codigo_estudiante.toLowerCase().includes(q) ||
+        `${p.nombres} ${p.apellidos}`.toLowerCase().includes(q) ||
+        `${p.apellidos}, ${p.nombres}`.toLowerCase().includes(q) ||
+        p.carrera.toLowerCase().includes(q),
+    );
+  }, [paseParticipantes, paseBuscar]);
 
   const handleCrearSesion = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -719,7 +855,138 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     { key: 'asis', header: 'Asistieron / Faltaron', render: (r) => `${r.total_asistieron} / ${r.total_faltaron}` },
   ];
 
-  const sesionesRealizadas = sesiones.filter((s) => s.estado_sesion === 'REALIZADA');
+  const sesionSeleccionadaEsRealizada = paseSesionMeta?.estado_sesion === 'REALIZADA';
+
+  const renderEstadoBadge = (r: ParticipanteSesionRow) => {
+    switch (r.estado) {
+      case 'ASISTIO':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <Check className="w-3 h-3" aria-hidden="true" />
+            Asistió{r.minutos_asistidos ? ` · ${r.minutos_asistidos}m` : ''}
+          </span>
+        );
+      case 'INASISTENCIA':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+            <UserX className="w-3 h-3" aria-hidden="true" />
+            Inasistencia
+          </span>
+        );
+      case 'RETIRO_BAJA':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+            <UserMinus className="w-3 h-3" aria-hidden="true" />
+            Retiro{r.fecha_retiro ? ` · ${r.fecha_retiro}` : ''}
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+            <Clock className="w-3 h-3" aria-hidden="true" />
+            Pendiente
+          </span>
+        );
+    }
+  };
+
+  const paseCols: TableColumn<ParticipanteSesionRow>[] = [
+    {
+      key: 'est',
+      header: 'Estudiante',
+      isRowHeader: true,
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="font-semibold text-slate-900 text-xs">
+            {r.nombres} {r.apellidos}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+            <span className="font-mono text-[11px] font-semibold text-teal-800 bg-teal-50/80 border border-teal-200/70 rounded px-1.5 py-0.2">
+              {r.codigo_estudiante}
+            </span>
+            <span className="text-[11px] text-slate-500 truncate">{r.carrera}</span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'estado',
+      header: 'Estado actual',
+      render: (r) => (
+        <div className="flex items-center gap-2">
+          {renderEstadoBadge(r)}
+          {savingAsigId === r.id_asignacion && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+              Guardando…
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'acc',
+      header: 'Registro rápido',
+      render: (r) => {
+        const isSaving = savingAsigId === r.id_asignacion;
+        const disableAsist = isSaving || !sesionSeleccionadaEsRealizada;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={disableAsist}
+              onClick={() => handleMarcarAsistencia(r, 'ASISTIO')}
+              title={
+                sesionSeleccionadaEsRealizada
+                  ? `Marcar asistencia (${paseSesionMeta?.duracion_programada_min ?? 45} min)`
+                  : 'Solo disponible para sesiones en estado REALIZADA'
+              }
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                r.estado === 'ASISTIO'
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+              }`}
+            >
+              <Check className="w-3.5 h-3.5" aria-hidden="true" />
+              Asistió
+            </button>
+            <button
+              type="button"
+              disabled={disableAsist}
+              onClick={() => handleMarcarAsistencia(r, 'INASISTENCIA')}
+              title={
+                sesionSeleccionadaEsRealizada
+                  ? 'Marcar inasistencia (0 min)'
+                  : 'Solo disponible para sesiones en estado REALIZADA'
+              }
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                r.estado === 'INASISTENCIA'
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+              }`}
+            >
+              <UserX className="w-3.5 h-3.5" aria-hidden="true" />
+              Inasistencia
+            </button>
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => setRetiroTarget(r)}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:opacity-45 disabled:cursor-not-allowed ${
+                r.estado === 'RETIRO_BAJA'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                  : 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+              }`}
+            >
+              <UserMinus className="w-3.5 h-3.5" aria-hidden="true" />
+              Retirar
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
+
   const headerMeta = TAB_HEADER_META[activeTab];
   const isEtlLayer = headerMeta.layer === 'ETL';
 
@@ -819,25 +1086,30 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
 
           {!isEtlLayer && activeTab !== 'estudiantes' && (
             <div className="flex flex-wrap items-center gap-2.5">
-              <select
-                aria-label="Filtrar por programa"
-                value={idPrograma}
-                onChange={(e) => setIdPrograma(e.target.value)}
-                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"
-              >
-                <option value="">Todos los programas</option>
-                {filtros?.programas.map((p) => (
-                  <option key={p.id_programa} value={p.id_programa}>
-                    {p.codigo_programa} ({p.codigo_practica})
-                  </option>
-                ))}
-              </select>
+              {activeTab !== 'asistencias' && (
+                <select
+                  aria-label="Filtrar por programa"
+                  value={idPrograma}
+                  onChange={(e) => setIdPrograma(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"
+                >
+                  <option value="">Todos los programas</option>
+                  {filtros?.programas.map((p) => (
+                    <option key={p.id_programa} value={p.id_programa}>
+                      {p.codigo_programa} ({p.codigo_practica})
+                    </option>
+                  ))}
+                </select>
+              )}
 
               {canManageSessions && (
                 <button
                   type="button"
                   onClick={() => {
-                    setNsProgramaId(idPrograma || String(filtros?.programas[0]?.id_programa || ''));
+                    setNsProgramaId(
+                      (activeTab === 'asistencias' ? paseProgramaId : idPrograma) ||
+                        String(filtros?.programas[0]?.id_programa || ''),
+                    );
                     setNsPracticaId(String(practicasUnicomponente[0]?.id_practica || ''));
                     setSesionModalOpen(true);
                   }}
@@ -850,10 +1122,19 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
 
               <button
                 type="button"
-                onClick={cargar}
+                onClick={() => {
+                  if (activeTab === 'asistencias' && paseSesionId) {
+                    cargarParticipantesSesion(Number(paseSesionId));
+                  } else {
+                    cargar();
+                  }
+                }}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${(activeTab === 'asistencias' ? paseLoading : loading) ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
                 Actualizar
               </button>
             </div>
@@ -964,92 +1245,171 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
         </section>
       )}
 
-      {/* TAB 1: ASISTENCIAS */}
+      {/* TAB 1: PASE DE LISTA POR SESIÓN */}
       {activeTab === 'asistencias' && canManageSessions && (
-        <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card space-y-4">
-          <div className="flex items-center gap-2.5">
-            <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-700 border border-teal-200/80 flex items-center justify-center">
-              <UserCheck className="w-4 h-4" aria-hidden="true" />
-            </span>
-            <div>
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Registrar o Actualizar Asistencia por Sesión
-              </h3>
-              <p className="text-xs text-slate-500">
-                Solo admite sesiones en estado <code>REALIZADA</code>. Cada cambio queda registrado con historial de auditoría.
-              </p>
+        <div className="space-y-5">
+          {/* Paso 1: Selector de Programa y Sesión */}
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card space-y-4">
+            <div className="flex items-center gap-2.5">
+              <span className="w-9 h-9 rounded-xl bg-teal-50 text-teal-700 border border-teal-200/80 flex items-center justify-center shrink-0">
+                <UserCheck className="w-4 h-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h3 className="font-display text-sm font-bold text-slate-900">
+                  Paso 1 · Seleccionar Programa y Sesión
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Elige el programa y la sesión para desplegar automáticamente la lista de estudiantes inscritos.
+                </p>
+              </div>
             </div>
-          </div>
 
-          <form onSubmit={handleRegistrarAsistencia} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end pt-2">
-            <label className="block lg:col-span-2">
-              <span className="block text-[11px] font-semibold text-slate-600 mb-1">Sesión REALIZADA</span>
-              <select
-                required
-                value={asisSesionId}
-                onChange={(e) => setAsisSesionId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-xs font-medium text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-none"
-              >
-                <option value="">Seleccione una sesión realizada…</option>
-                {sesionesRealizadas.map((s) => (
-                  <option key={s.id_sesion} value={s.id_sesion}>
-                    {s.codigo_programa} · #{s.numero_sesion} ({s.fecha_sesion} · {s.codigo_practica})
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  1. Programa
+                </span>
+                <select
+                  value={paseProgramaId}
+                  onChange={(e) => {
+                    setPaseProgramaId(e.target.value);
+                    setPaseBuscar('');
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5 text-xs font-semibold text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-none"
+                >
+                  <option value="">Seleccione un programa…</option>
+                  {(filtros?.programas || []).map((p) => (
+                    <option key={p.id_programa} value={p.id_programa}>
+                      {p.codigo_practica} · {p.codigo_programa} — {p.nombre_programa} ({p.estado_programa})
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-slate-600 mb-1">ID Asignación</span>
-              <input
-                type="number"
-                min={1}
-                required
-                placeholder="Ej. 101"
-                value={asisAsignacionId}
-                onChange={(e) => setAsisAsignacionId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-xs font-medium text-slate-800 focus:bg-white"
+              <label className="block">
+                <span className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  2. Sesión ({paseSesiones.length} disponibles)
+                </span>
+                <select
+                  value={paseSesionId}
+                  disabled={!paseProgramaId || paseSesionesLoading}
+                  onChange={(e) => setPaseSesionId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5 text-xs font-semibold text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-none disabled:opacity-50"
+                >
+                  {paseSesionesLoading ? (
+                    <option value="">Cargando sesiones…</option>
+                  ) : paseSesiones.length === 0 ? (
+                    <option value="">Sin sesiones registradas</option>
+                  ) : (
+                    paseSesiones.map((s) => (
+                      <option key={s.id_sesion} value={s.id_sesion}>
+                        Sesión #{s.numero_sesion} · {s.fecha_sesion} · {s.codigo_practica} ({s.duracion_programada_min} min) — {s.estado_sesion}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+            </div>
+
+            {paseSesionMeta && !sesionSeleccionadaEsRealizada && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/80 px-3.5 py-2.5 text-xs text-amber-900">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>
+                  Esta sesión se encuentra en estado <strong>{paseSesionMeta.estado_sesion}</strong>. El registro de{' '}
+                  <strong>Asistió</strong> e <strong>Inasistencia</strong> se habilita únicamente cuando la sesión ha sido{' '}
+                  <strong>REALIZADA</strong> (el retiro de participantes sigue disponible).
+                </span>
+              </div>
+            )}
+          </section>
+
+          {/* Paso 2: Lista Interactiva de Estudiantes Inscritos */}
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="w-9 h-9 rounded-xl bg-slate-100 text-slate-700 border border-slate-200/80 flex items-center justify-center shrink-0">
+                  <Users className="w-4 h-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className="font-display text-sm font-bold text-slate-900">
+                    Paso 2 · Lista de Estudiantes Inscritos ({paseResumen.total})
+                  </h3>
+                  {paseSesionMeta ? (
+                    <p className="text-xs text-slate-500">
+                      {paseSesionMeta.codigo_programa} · Sesión #{paseSesionMeta.numero_sesion} ({paseSesionMeta.fecha_sesion} ·{' '}
+                      {paseSesionMeta.codigo_practica} · {paseSesionMeta.duracion_programada_min} min)
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      Selecciona una sesión arriba para iniciar el pase de lista.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative w-full sm:w-72">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="search"
+                  aria-label="Buscar estudiante por código o nombre"
+                  placeholder="Buscar por código (UNT26-EST-) o nombre…"
+                  value={paseBuscar}
+                  onChange={(e) => setPaseBuscar(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 py-2 text-xs text-slate-800 focus:bg-white focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Contador Resumen */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/70 px-3.5 py-2.5 flex items-center justify-between">
+                <span className="text-xs font-semibold text-emerald-800">Asistieron</span>
+                <span className="font-display text-lg font-extrabold text-emerald-950 tabular-nums">
+                  {paseResumen.asistieron}
+                </span>
+              </div>
+              <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 px-3.5 py-2.5 flex items-center justify-between">
+                <span className="text-xs font-semibold text-amber-800">Inasistencias</span>
+                <span className="font-display text-lg font-extrabold text-amber-950 tabular-nums">
+                  {paseResumen.inasistencias}
+                </span>
+              </div>
+              <div className="rounded-xl border border-rose-200/80 bg-rose-50/70 px-3.5 py-2.5 flex items-center justify-between">
+                <span className="text-xs font-semibold text-rose-800">Retiros</span>
+                <span className="font-display text-lg font-extrabold text-rose-950 tabular-nums">
+                  {paseResumen.retiros}
+                </span>
+              </div>
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50 px-3.5 py-2.5 flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700">Pendientes</span>
+                <span className="font-display text-lg font-extrabold text-slate-900 tabular-nums">
+                  {paseResumen.pendientes}
+                </span>
+              </div>
+            </div>
+
+            {paseLoading ? (
+              <TableSkeleton rows={6} cols={3} />
+            ) : !paseSesionId ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs text-slate-500">
+                Seleccione un programa y una sesión para visualizar a los estudiantes inscritos.
+              </div>
+            ) : participantesFiltrados.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs text-slate-500">
+                {paseBuscar.trim()
+                  ? `No se encontraron estudiantes que coincidan con "${paseBuscar.trim()}".`
+                  : 'No hay estudiantes inscritos en este programa.'}
+              </div>
+            ) : (
+              <ResponsiveTable
+                caption="Pase de lista de estudiantes inscritos en la sesión seleccionada"
+                columns={paseCols}
+                rows={participantesFiltrados}
+                rowKey={(r) => r.id_asignacion}
               />
-            </label>
-
-            <label className="block">
-              <span className="block text-[11px] font-semibold text-slate-600 mb-1">Estado</span>
-              <select
-                value={asisEstado}
-                onChange={(e) => setAsisEstado(e.target.value as 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA')}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-xs font-medium text-slate-800 focus:bg-white"
-              >
-                <option value="ASISTIO">ASISTIO</option>
-                <option value="INASISTENCIA">INASISTENCIA</option>
-                <option value="RETIRO_BAJA">RETIRO_BAJA</option>
-              </select>
-            </label>
-
-            <div className="flex items-end gap-2">
-              {asisEstado === 'ASISTIO' && (
-                <label className="block w-20">
-                  <span className="block text-[11px] font-semibold text-slate-600 mb-1">Min.</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={480}
-                    required
-                    value={asisMinutos}
-                    onChange={(e) => setAsisMinutos(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-2.5 py-2.5 text-xs font-medium text-slate-800 focus:bg-white"
-                  />
-                </label>
-              )}
-              <button
-                type="submit"
-                disabled={asisBusy}
-                className="flex-1 rounded-xl bg-teal-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 transition-colors"
-              >
-                {asisBusy ? 'Guardando…' : 'Registrar'}
-              </button>
-            </div>
-          </form>
-        </section>
+            )}
+          </section>
+        </div>
       )}
 
       {/* TAB 2: SESIONES */}
@@ -1855,6 +2215,52 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
               </button>
             </div>
           </form>
+        )}
+      </ModalDialog>
+
+      {/* Modal: Confirmación rápida de Retiro / Baja */}
+      <ModalDialog
+        open={Boolean(retiroTarget)}
+        onClose={() => setRetiroTarget(null)}
+        title="Confirmar retiro del estudiante"
+        subtitle={
+          paseSesionMeta
+            ? `${paseSesionMeta.codigo_programa} · Sesión #${paseSesionMeta.numero_sesion} (${paseSesionMeta.fecha_sesion})`
+            : undefined
+        }
+      >
+        {retiroTarget && (
+          <div className="space-y-4 text-sm">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3.5 text-xs text-rose-950 space-y-1">
+              <p className="font-semibold">
+                {retiroTarget.nombres} {retiroTarget.apellidos}{' '}
+                <span className="font-mono text-rose-800">({retiroTarget.codigo_estudiante})</span>
+              </p>
+              <p className="text-rose-800/90 leading-relaxed">
+                Se registrará el retiro en esta sesión y se actualizará su inscripción con fecha de baja,
+                preservando el historial de auditoría.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setRetiroTarget(null)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarRetiro}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 transition-colors"
+              >
+                <UserMinus className="w-3.5 h-3.5" aria-hidden="true" />
+                Confirmar retiro
+              </button>
+            </div>
+          </div>
         )}
       </ModalDialog>
     </div>
