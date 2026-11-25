@@ -1,13 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ColumnDef } from '@tanstack/react-table';
 import {
   Activity,
-  ArrowUpDown,
   Calendar,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   Filter,
   HeartPulse,
@@ -17,15 +15,15 @@ import {
 import { api, type FiltrosResponse } from '@/lib/api';
 import { AiReportButton } from './AiReportButton';
 import { KpiCard } from './KpiCard';
-import { EChartBox } from './EChartBox';
+import { ChartCard } from './ChartCard';
 import { SemaforoBadge } from './SemaforoBadge';
-import { ChartSkeleton, EmptyState, KpiGridSkeleton, TableSkeleton } from './UiStates';
+import { DataBarCell, PowerDataTable } from './PowerDataTable';
+import { CrossFilterBanner, PowerBiHintBadge, SlicerPills } from './PowerBiControls';
+import { ChartSkeleton, KpiGridSkeleton, TableSkeleton } from './UiStates';
 import {
   CHART_COLORS,
   EXECUTIVE_AXIS_LABEL,
   EXECUTIVE_SPLIT_LINE,
-  barGradient,
-  metaMarkLine,
 } from '@/lib/chartTheme';
 
 interface EvolucionReportProps {
@@ -34,6 +32,24 @@ interface EvolucionReportProps {
   semestre: string;
 }
 
+interface EvolucionRow {
+  codigo_instrumento: 'PSS-10' | 'PCL-5';
+  dim_clave: string;
+  dim_etiqueta?: string;
+  pares_validos: number;
+  suprimido: boolean;
+  promedio_inicial: number | null;
+  promedio_final: number | null;
+  reduccion_promedio: number | null;
+  disminuyeron: number | null;
+  sin_cambio: number | null;
+  aumentaron: number | null;
+  meta_operativa: string;
+  semaforo: 'BUENO' | 'REGULAR' | 'MALO' | 'SIN_DATOS' | 'SUPRIMIDO';
+}
+
+type DirectionFilter = 'DISMINUYERON' | 'SIN_CAMBIO' | 'AUMENTARON';
+
 function formatFechaEs(iso: string | null | undefined): string {
   if (!iso) return '—';
   const [y, m, d] = iso.split('-');
@@ -41,10 +57,10 @@ function formatFechaEs(iso: string | null | undefined): string {
   return `${d}/${m}/${y}`;
 }
 
-function compactPrograma(codigo: string): string {
-  const match = codigo.match(/(P-\d{2}|MIXTO)-(C\d{2})$/);
+function compactLabel(raw: string): string {
+  const match = raw.match(/(P-\d{2}|MIXTO)-(C\d{2})$/);
   if (match) return `${match[1]} · ${match[2]}`;
-  return codigo;
+  return raw.length > 26 ? `${raw.slice(0, 24)}…` : raw;
 }
 
 export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionReportProps) {
@@ -57,21 +73,29 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
   const [instrumento, setInstrumento] = useState<'' | 'PSS-10' | 'PCL-5'>('');
   const [categoriaEvento, setCategoriaEvento] = useState('');
   const [agruparPor, setAgruparPor] = useState<'programa' | 'facultad' | 'grupo_etario'>('programa');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [filtersOpen, setFiltersOpen] = useState(true);
-  const [sortBy, setSortBy] = useState<'reduccion' | 'pares' | 'none'>('none');
-  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Selector de escala para Dumbbell (evita mezclar 0–40 y 0–80 cuando instrumento = Todos)
+  const [dumbbellInst, setDumbbellInst] = useState<'PSS-10' | 'PCL-5'>('PSS-10');
+
+  // Cross-filtering local instantáneo estilo Power BI
+  const [crossDimKey, setCrossDimKey] = useState<string | null>(null);
+  const [crossDirection, setCrossDirection] = useState<DirectionFilter | null>(null);
 
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const captionId = useId();
+  useEffect(() => {
+    if (instrumento === 'PSS-10' || instrumento === 'PCL-5') {
+      setDumbbellInst(instrumento);
+    }
+  }, [instrumento]);
 
   useEffect(() => {
-    setPage(1);
-  }, [semestre]);
+    setCrossDimKey(null);
+    setCrossDirection(null);
+  }, [agruparPor, semestre, corte, instrumento]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -88,8 +112,8 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         instrumento: instrumento || undefined,
         categoria_evento: categoriaEvento || undefined,
         agrupar_por: agruparPor,
-        page,
-        pageSize,
+        page: 1,
+        pageSize: 100,
       });
       setData(res);
     } catch (e: any) {
@@ -108,8 +132,6 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     instrumento,
     categoriaEvento,
     agruparPor,
-    page,
-    pageSize,
   ]);
 
   useEffect(() => {
@@ -125,7 +147,8 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     setInstrumento('');
     setCategoriaEvento('');
     setAgruparPor('programa');
-    setPage(1);
+    setCrossDimKey(null);
+    setCrossDirection(null);
   };
 
   const activeFilterCount = [
@@ -134,18 +157,40 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     idPrograma,
     grupoEtario,
     sexo,
-    instrumento,
     categoriaEvento,
-    agruparPor !== 'programa' ? agruparPor : '',
   ].filter(Boolean).length;
 
   const programasFiltrados = (filtros?.programas || []).filter(
     (p) => !semestre || p.periodo_academico === semestre,
   );
-  const pag = data?.paginacion;
-  const totales: any[] = data?.totales_por_instrumento || [];
-  const pssTotal = totales.find((t) => t.codigo_instrumento === 'PSS-10');
-  const pclTotal = totales.find((t) => t.codigo_instrumento === 'PCL-5');
+
+  const filasRaw: EvolucionRow[] = data?.filas || [];
+  const totalesRaw: EvolucionRow[] = data?.totales_por_instrumento || [];
+
+  // Filas filtradas por Cross-Filtering
+  const filasCrossFiltradas = useMemo(() => {
+    return filasRaw.filter((r) => {
+      if (crossDimKey && r.dim_clave !== crossDimKey) return false;
+      if (crossDirection) {
+        if (r.suprimido) return false;
+        if (crossDirection === 'DISMINUYERON' && Number(r.disminuyeron || 0) <= 0) return false;
+        if (crossDirection === 'SIN_CAMBIO' && Number(r.sin_cambio || 0) <= 0) return false;
+        if (crossDirection === 'AUMENTARON' && Number(r.aumentaron || 0) <= 0) return false;
+      }
+      return true;
+    });
+  }, [filasRaw, crossDimKey, crossDirection]);
+
+  // Recalcular KPIs si existe crossDimKey activo (respetando estrictamente n >= 5)
+  const effectiveTotals = useMemo(() => {
+    if (!crossDimKey) return totalesRaw;
+    return (['PSS-10', 'PCL-5'] as const)
+      .map((inst) => filasRaw.find((r) => r.codigo_instrumento === inst && r.dim_clave === crossDimKey))
+      .filter((x): x is EvolucionRow => Boolean(x));
+  }, [crossDimKey, totalesRaw, filasRaw]);
+
+  const pssTotal = effectiveTotals.find((t) => t.codigo_instrumento === 'PSS-10');
+  const pclTotal = effectiveTotals.find((t) => t.codigo_instrumento === 'PCL-5');
 
   const etiquetaDimension =
     agruparPor === 'facultad'
@@ -154,32 +199,193 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         ? 'Grupo etario'
         : 'Programa';
 
-  const filasOrdenadas = useMemo(() => {
-    const raw: any[] = data?.filas || [];
-    if (sortBy === 'none') return raw;
-    return [...raw].sort((a, b) => {
-      const av = sortBy === 'pares' ? Number(a.pares_validos || 0) : Number(a.reduccion_promedio ?? -999);
-      const bv = sortBy === 'pares' ? Number(b.pares_validos || 0) : Number(b.reduccion_promedio ?? -999);
-      return sortDir === 'desc' ? bv - av : av - bv;
-    });
-  }, [data?.filas, sortBy, sortDir]);
+  // Visual 1: Gráfico Dumbbell / Pre–Post (Inicial vs. Final por grupo)
+  const dumbbellRows = useMemo(() => {
+    const activeInst = instrumento || dumbbellInst;
+    return filasRaw
+      .filter(
+        (r) =>
+          r.codigo_instrumento === activeInst &&
+          !r.suprimido &&
+          r.promedio_inicial != null &&
+          r.promedio_final != null,
+      )
+      .sort((a, b) => Number(b.reduccion_promedio ?? 0) - Number(a.reduccion_promedio ?? 0))
+      .slice(0, 12);
+  }, [filasRaw, instrumento, dumbbellInst]);
 
-  const toggleSort = (col: 'reduccion' | 'pares') => {
-    if (sortBy === col) {
-      setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
-    } else {
-      setSortBy(col);
-      setSortDir('desc');
-    }
-  };
+  const chartDumbbellOption = useMemo(() => {
+    if (dumbbellRows.length === 0) return null;
+    const activeInst = instrumento || dumbbellInst;
+    const maxScale = activeInst === 'PSS-10' ? 40 : 80;
+    const categories = dumbbellRows.map((r) => compactLabel(r.dim_clave));
 
-  // Chart 1: Inicial vs Final por Instrumento (strictly separated scales)
-  const chartPrePostOption = useMemo(() => {
-    const validTotals = totales.filter((t) => !t.suprimido && t.promedio_inicial != null);
     return {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const idx = params?.[0]?.dataIndex ?? 0;
+          const row = dumbbellRows[idx];
+          if (!row) return '';
+          const delta = Number(row.reduccion_promedio ?? 0);
+          return `<div style="font-weight:700;margin-bottom:4px">${row.dim_clave} (${row.codigo_instrumento})</div>
+            <div>Promedio Inicial: <strong>${Number(row.promedio_inicial).toFixed(2)}</strong> pts</div>
+            <div>Promedio Final: <strong style="color:#5EEAD4">${Number(row.promedio_final).toFixed(2)}</strong> pts</div>
+            <div>Reducción: <strong style="color:${delta >= 0 ? '#34D399' : '#FB7185'}">${delta > 0 ? '+' : ''}${delta.toFixed(2)} pts</strong></div>
+            <div style="color:#94A3B8;font-size:11px;margin-top:3px">n = ${row.pares_validos} pares válidos · Clic para filtrar</div>`;
+        },
+      },
+      legend: {
+        top: 0,
+        right: 0,
+        icon: 'circle',
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: '#475569', fontSize: 11 },
+        data: ['Promedio Inicial', 'Promedio Final'],
+      },
+      grid: { left: 16, right: 32, top: 34, bottom: 24, containLabel: true },
+      xAxis: {
+        type: 'value',
+        min: 0,
+        max: maxScale,
+        name: `Puntaje ${activeInst} (0–${maxScale})`,
+        nameLocation: 'middle',
+        nameGap: 22,
+        nameTextStyle: { color: '#64748B', fontSize: 11 },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
+        splitLine: EXECUTIVE_SPLIT_LINE,
+      },
+      yAxis: {
+        type: 'category',
+        inverse: true,
+        data: categories,
+        axisLine: { lineStyle: { color: '#E2E8F0' } },
+        axisTick: { show: false },
+        axisLabel: { ...EXECUTIVE_AXIS_LABEL, width: 135, overflow: 'truncate' },
+      },
+      series: [
+        // Conector Dumbbell (línea entre Inicial y Final)
+        {
+          name: 'Cambio',
+          type: 'custom',
+          silent: false,
+          z: 1,
+          renderItem: (_params: any, apiChart: any) => {
+            const yIdx = apiChart.value(0);
+            const xIni = apiChart.value(1);
+            const xFin = apiChart.value(2);
+            const start = apiChart.coord([xIni, yIdx]);
+            const end = apiChart.coord([xFin, yIdx]);
+            const row = dumbbellRows[yIdx];
+            const isSelected = !crossDimKey || row?.dim_clave === crossDimKey;
+            const improved = xFin <= xIni;
+
+            return {
+              type: 'line',
+              shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] },
+              style: {
+                stroke: improved ? '#14B8A6' : '#F43F5E',
+                lineWidth: isSelected ? 4 : 2,
+                opacity: isSelected ? 0.85 : 0.2,
+              },
+            };
+          },
+          data: dumbbellRows.map((r, i) => [
+            i,
+            Number(r.promedio_inicial),
+            Number(r.promedio_final),
+          ]),
+        },
+        // Punto Inicial
+        {
+          name: 'Promedio Inicial',
+          type: 'scatter',
+          symbolSize: 11,
+          z: 3,
+          data: dumbbellRows.map((r, i) => {
+            const isSelected = !crossDimKey || r.dim_clave === crossDimKey;
+            return {
+              name: r.dim_clave,
+              value: [Number(r.promedio_inicial), i],
+              itemStyle: {
+                color: '#64748B',
+                borderColor: '#ffffff',
+                borderWidth: 2,
+                opacity: isSelected ? 1 : 0.25,
+              },
+            };
+          }),
+        },
+        // Punto Final
+        {
+          name: 'Promedio Final',
+          type: 'scatter',
+          symbolSize: 13,
+          z: 4,
+          label: {
+            show: true,
+            position: 'left',
+            distance: 8,
+            fontSize: 10,
+            fontWeight: 700,
+            formatter: (p: any) => {
+              const row = dumbbellRows[p.dataIndex];
+              if (!row || row.reduccion_promedio == null) return '';
+              const d = Number(row.reduccion_promedio);
+              return d >= 0 ? `-${d.toFixed(1)}` : `+${Math.abs(d).toFixed(1)}`;
+            },
+          },
+          data: dumbbellRows.map((r, i) => {
+            const isSelected = !crossDimKey || r.dim_clave === crossDimKey;
+            const improved = Number(r.reduccion_promedio ?? 0) >= 0;
+            return {
+              name: r.dim_clave,
+              value: [Number(r.promedio_final), i],
+              itemStyle: {
+                color: improved ? '#0D9488' : '#E11D48',
+                borderColor: '#ffffff',
+                borderWidth: 2,
+                opacity: isSelected ? 1 : 0.25,
+              },
+              label: {
+                color: improved ? '#0F766E' : '#BE123C',
+                opacity: isSelected ? 1 : 0.3,
+              },
+            };
+          }),
+        },
+      ],
+    };
+  }, [dumbbellRows, instrumento, dumbbellInst, crossDimKey]);
+
+  // Visual 2: Barra Apilada al 100 % (Disminuyeron / Sin cambio / Aumentaron)
+  const chartStacked100Option = useMemo(() => {
+    const validTotals = effectiveTotals.filter((t) => !t.suprimido && t.pares_validos >= 5);
+    if (validTotals.length === 0) return null;
+
+    const toPct = (val: number | null, total: number) =>
+      total > 0 ? Number((((val || 0) / total) * 100).toFixed(1)) : 0;
+
+    const opacityFor = (dir: DirectionFilter) =>
+      !crossDirection || crossDirection === dir ? 1 : 0.28;
+
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const idx = params?.[0]?.dataIndex ?? 0;
+          const row = validTotals[idx];
+          if (!row) return '';
+          const total = Math.max(1, row.pares_validos);
+          return `<div style="font-weight:700;margin-bottom:4px">${row.codigo_instrumento} (n = ${row.pares_validos})</div>
+            <div><span style="color:#34D399">●</span> Disminuyeron: <strong>${row.disminuyeron}</strong> (${toPct(row.disminuyeron, total)}%)</div>
+            <div><span style="color:#94A3B8">●</span> Sin cambio: <strong>${row.sin_cambio}</strong> (${toPct(row.sin_cambio, total)}%)</div>
+            <div><span style="color:#FB7185">●</span> Aumentaron: <strong>${row.aumentaron}</strong> (${toPct(row.aumentaron, total)}%)</div>
+            <div style="color:#94A3B8;font-size:11px;margin-top:3px">Clic en un segmento para filtrar la tabla</div>`;
+        },
       },
       legend: {
         top: 0,
@@ -189,777 +395,641 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
         itemHeight: 10,
         textStyle: { color: '#475569', fontSize: 11 },
       },
-      grid: { left: 14, right: 16, top: 34, bottom: 24, containLabel: true },
+      grid: { left: 16, right: 20, top: 38, bottom: 24, containLabel: true },
       xAxis: {
-        type: 'category',
-        data: validTotals.map((t) =>
-          t.codigo_instrumento === 'PSS-10' ? 'PSS-10 (0–40)' : 'PCL-5 (0–80)',
-        ),
-        axisLine: { lineStyle: { color: '#E2E8F0' } },
-        axisTick: { show: false },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
+        type: 'value',
+        min: 0,
+        max: 100,
+        axisLabel: { ...EXECUTIVE_AXIS_LABEL, formatter: '{value}%' },
+        splitLine: EXECUTIVE_SPLIT_LINE,
       },
       yAxis: {
-        type: 'value',
-        name: 'Puntaje promedio',
-        nameTextStyle: { color: '#64748B', fontSize: 11 },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
-        splitLine: EXECUTIVE_SPLIT_LINE,
+        type: 'category',
+        data: validTotals.map((t) => `${t.codigo_instrumento}\n(n=${t.pares_validos})`),
+        axisLine: { lineStyle: { color: '#E2E8F0' } },
+        axisTick: { show: false },
+        axisLabel: { ...EXECUTIVE_AXIS_LABEL, fontWeight: 700 },
       },
       series: [
         {
-          name: 'Promedio Inicial',
+          name: 'Disminuyeron',
           type: 'bar',
-          barMaxWidth: 36,
-          itemStyle: { borderRadius: [8, 8, 0, 0], color: barGradient('#94A3B8', '#64748B') },
-          data: validTotals.map((t) => Number(t.promedio_inicial.toFixed(2))),
-        },
-        {
-          name: 'Promedio Final',
-          type: 'bar',
-          barMaxWidth: 36,
-          itemStyle: { borderRadius: [8, 8, 0, 0], color: barGradient('#14B8A6', '#0D9488') },
-          data: validTotals.map((t) => Number(t.promedio_final.toFixed(2))),
-        },
-      ],
-    };
-  }, [totales]);
-
-  // Chart 2: Dirección del cambio (Disminuyeron / Sin cambio / Aumentaron)
-  const chartDireccionOption = useMemo(() => {
-    const validTotals = totales.filter((t) => !t.suprimido && t.pares_validos >= 5);
-    return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-      },
-      legend: {
-        top: 0,
-        right: 0,
-        icon: 'circle',
-        itemWidth: 9,
-        itemHeight: 9,
-        textStyle: { color: '#475569', fontSize: 11 },
-      },
-      grid: { left: 14, right: 16, top: 34, bottom: 24, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: validTotals.map((t) => t.codigo_instrumento),
-        axisLine: { lineStyle: { color: '#E2E8F0' } },
-        axisTick: { show: false },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
-      },
-      yAxis: {
-        type: 'value',
-        name: 'Pares válidos',
-        nameTextStyle: { color: '#64748B', fontSize: 11 },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
-        splitLine: EXECUTIVE_SPLIT_LINE,
-      },
-      series: [
-        {
-          name: 'Disminuyeron (mejora)',
-          type: 'bar',
-          stack: 'dir',
-          barMaxWidth: 46,
-          itemStyle: { color: CHART_COLORS.emerald },
-          data: validTotals.map((t) => t.disminuyeron ?? 0),
+          stack: 'pct',
+          barMaxWidth: 38,
+          itemStyle: {
+            color: CHART_COLORS.emerald,
+            opacity: opacityFor('DISMINUYERON'),
+            borderRadius: [6, 0, 0, 6],
+          },
+          label: {
+            show: true,
+            position: 'inside',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            formatter: (p: any) => (p.value >= 8 ? `${p.value}%` : ''),
+          },
+          data: validTotals.map((t) => toPct(t.disminuyeron, t.pares_validos)),
         },
         {
           name: 'Sin cambio',
           type: 'bar',
-          stack: 'dir',
-          barMaxWidth: 46,
-          itemStyle: { color: CHART_COLORS.slateLight },
-          data: validTotals.map((t) => t.sin_cambio ?? 0),
+          stack: 'pct',
+          barMaxWidth: 38,
+          itemStyle: {
+            color: CHART_COLORS.slate,
+            opacity: opacityFor('SIN_CAMBIO'),
+          },
+          label: {
+            show: true,
+            position: 'inside',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            formatter: (p: any) => (p.value >= 8 ? `${p.value}%` : ''),
+          },
+          data: validTotals.map((t) => toPct(t.sin_cambio, t.pares_validos)),
         },
         {
           name: 'Aumentaron',
           type: 'bar',
-          stack: 'dir',
-          barMaxWidth: 46,
-          itemStyle: { borderRadius: [6, 6, 0, 0], color: CHART_COLORS.rose },
-          data: validTotals.map((t) => t.aumentaron ?? 0),
+          stack: 'pct',
+          barMaxWidth: 38,
+          itemStyle: {
+            color: CHART_COLORS.rose,
+            opacity: opacityFor('AUMENTARON'),
+            borderRadius: [0, 6, 6, 0],
+          },
+          label: {
+            show: true,
+            position: 'inside',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            formatter: (p: any) => (p.value >= 8 ? `${p.value}%` : ''),
+          },
+          data: validTotals.map((t) => toPct(t.aumentaron, t.pares_validos)),
         },
       ],
     };
-  }, [totales]);
+  }, [effectiveTotals, crossDirection]);
 
-  // Suppress unused warning for metaMarkLine (we use it in other reports; keep clean)
-  void metaMarkLine;
+  // Columnas PowerDataTable
+  const maxPares = useMemo(
+    () => Math.max(10, ...filasCrossFiltradas.map((r) => Number(r.pares_validos || 0))),
+    [filasCrossFiltradas],
+  );
+
+  const columns = useMemo<ColumnDef<EvolucionRow, any>[]>(
+    () => [
+      {
+        accessorKey: 'dim_clave',
+        header: etiquetaDimension,
+        cell: ({ row }) => (
+          <div>
+            <div className="font-bold text-slate-900">{row.original.dim_clave}</div>
+            {row.original.dim_etiqueta && row.original.dim_etiqueta !== row.original.dim_clave && (
+              <div className="text-[11px] text-slate-500">{row.original.dim_etiqueta}</div>
+            )}
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'codigo_instrumento',
+        header: 'Instrumento',
+        cell: ({ getValue }) => {
+          const val = getValue() as string;
+          return (
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold ${
+                val === 'PSS-10'
+                  ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                  : 'bg-sky-50 text-sky-800 border border-sky-200'
+              }`}
+            >
+              {val}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: 'pares_validos',
+        header: 'Pares válidos',
+        cell: ({ row }) => (
+          <DataBarCell
+            value={row.original.pares_validos}
+            max={maxPares}
+            display={`n = ${row.original.pares_validos}`}
+            tone="indigo"
+          />
+        ),
+      },
+      {
+        accessorKey: 'promedio_inicial',
+        header: 'Prom. Inicial',
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs text-slate-400 italic">Suprimido (n&lt;5)</span>
+          ) : (
+            <span className="tabular-nums font-medium text-slate-700">
+              {row.original.promedio_inicial != null ? row.original.promedio_inicial.toFixed(2) : '—'}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'promedio_final',
+        header: 'Prom. Final',
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs text-slate-400 italic">Suprimido</span>
+          ) : (
+            <span className="tabular-nums font-semibold text-slate-900">
+              {row.original.promedio_final != null ? row.original.promedio_final.toFixed(2) : '—'}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'reduccion_promedio',
+        header: 'Reducción (pts)',
+        cell: ({ row }) => {
+          if (row.original.suprimido || row.original.reduccion_promedio == null) {
+            return <span className="text-xs text-slate-400 italic">Suprimido</span>;
+          }
+          const red = row.original.reduccion_promedio;
+          const maxScale = row.original.codigo_instrumento === 'PSS-10' ? 12 : 25;
+          const meta = row.original.codigo_instrumento === 'PSS-10' ? 4 : 10;
+          return (
+            <DataBarCell
+              value={red}
+              max={maxScale}
+              display={`${red > 0 ? '+' : ''}${red.toFixed(2)} pts`}
+              tone={red >= meta ? 'emerald' : red > 0 ? 'amber' : 'rose'}
+            />
+          );
+        },
+      },
+      {
+        id: 'distribucion',
+        header: 'Dismin. / Igual / Aum.',
+        enableSorting: false,
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs text-slate-400">—</span>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs tabular-nums">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold">
+                ↓{row.original.disminuyeron ?? 0}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">
+                ={row.original.sin_cambio ?? 0}
+              </span>
+              <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 font-semibold">
+                ↑{row.original.aumentaron ?? 0}
+              </span>
+            </div>
+          ),
+      },
+      {
+        accessorKey: 'semaforo',
+        header: 'Semáforo',
+        cell: ({ getValue }) => <SemaforoBadge estado={getValue()} />,
+      },
+    ],
+    [etiquetaDimension, maxPares],
+  );
+
+  const crossFilterItems = useMemo(() => {
+    const list: Array<{ label: string; value: string; onClear: () => void }> = [];
+    if (crossDimKey) {
+      list.push({
+        label: etiquetaDimension,
+        value: crossDimKey,
+        onClear: () => setCrossDimKey(null),
+      });
+    }
+    if (crossDirection) {
+      const dirLabel =
+        crossDirection === 'DISMINUYERON'
+          ? 'Disminuyeron'
+          : crossDirection === 'SIN_CAMBIO'
+            ? 'Sin cambio'
+            : 'Aumentaron';
+      list.push({
+        label: 'Dirección del cambio',
+        value: dirLabel,
+        onClear: () => setCrossDirection(null),
+      });
+    }
+    return list;
+  }, [crossDimKey, crossDirection, etiquetaDimension]);
 
   return (
     <div className="space-y-5">
-      {/* Power BI Filter Bar & Report Header */}
-      <section className="rounded-2xl border border-slate-200/80 bg-white shadow-card overflow-hidden">
-        <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-teal-50 text-teal-700 border border-teal-200/80">
-                RG-01
-              </span>
-              <h2 className="font-display text-lg font-bold text-slate-900 tracking-tight">
-                Evolución del Estrés Percibido (PSS-10) y Síntomas Postraumáticos (PCL-5)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Pares válidos en ventana · Semestre <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Corte{' '}
-              <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-            </p>
-          </div>
-
+      {/* Header + AI Assistant */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
-            >
-              <Filter className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-              <span>Filtros</span>
-              {activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-[10px] font-bold text-white">
-                  {activeFilterCount}
-                </span>
-              )}
-              {filtersOpen ? (
-                <ChevronUp className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
-              )}
-            </button>
-
-            <AiReportButton
-              reporte="RG-01"
-              corte={data?.corte || corte}
-              disabled={loading || !data}
-              filtros={{ semestre, facultad, idPractica, idPrograma, instrumento, agruparPor }}
-              kpis={
-                data
-                  ? Object.fromEntries(
-                      totales.map((t) => [
-                        t.codigo_instrumento,
-                        {
-                          pares_validos: t.pares_validos,
-                          promedio_inicial: t.promedio_inicial,
-                          promedio_final: t.promedio_final,
-                          reduccion_promedio: t.reduccion_promedio,
-                          semaforo: t.semaforo,
-                        },
-                      ]),
-                    )
-                  : null
-              }
-              grupos={(data?.filas || []).map((r: any) => ({
-                nombre: `${r.codigo_instrumento} · ${r.dim_clave}`,
-                n: Number(r.pares_validos || 0),
-                instrumento: r.codigo_instrumento,
-                valor: r.reduccion_promedio,
-                semaforo: r.semaforo,
-              }))}
-            />
+            <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 border border-teal-200 text-[11px] font-bold tracking-wider uppercase">
+              RG-01 · Reporte Gerencial
+            </span>
+            <PowerBiHintBadge />
+            <span className="text-xs text-slate-500 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+              Corte: <strong className="text-slate-700">{formatFechaEs(data?.corte || corte)}</strong>
+            </span>
           </div>
+          <h2 className="text-xl font-bold text-slate-900 font-display tracking-tight mt-1">
+            Evolución de Estrés Percibido (PSS-10) y Trauma (PCL-5)
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Comparación pre–post de pares válidos en ventana. Escalas estrictamente separadas y supresión estadística cuando n &lt; 5.
+          </p>
         </div>
 
-        {filtersOpen && (
-          <div className="px-5 pb-5 pt-3 border-t border-slate-100 bg-slate-50/50 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Fecha de corte</span>
-                <div className="relative">
-                  <Calendar
-                    className="w-3.5 h-3.5 text-teal-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                    aria-hidden="true"
-                  />
-                  <input
-                    type="date"
-                    value={corte}
-                    onChange={(e) => {
-                      setCorte(e.target.value);
-                      setPage(1);
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                  />
-                </div>
-              </label>
+        <AiReportButton
+          reporte="RG-01"
+          corte={data?.corte || corte}
+          filtros={{
+            semestre: semestre || 'TODOS',
+            facultad: facultad || 'TODAS',
+            instrumento: instrumento || 'AMBOS',
+            agrupar_por: agruparPor,
+            filtro_cruzado: crossDimKey || 'NINGUNO',
+          }}
+          kpis={{
+            pss10: pssTotal || null,
+            pcl5: pclTotal || null,
+          }}
+          grupos={filasCrossFiltradas
+            .filter((r) => !r.suprimido && r.pares_validos >= 5)
+            .slice(0, 12)
+            .map((r) => ({
+              nombre: `${r.dim_clave} (${r.codigo_instrumento})`,
+              n: r.pares_validos,
+              instrumento: r.codigo_instrumento,
+              valor: r.reduccion_promedio,
+              semaforo: r.semaforo,
+            }))}
+          disabled={loading || !data}
+        />
+      </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Instrumento</span>
-                <select
-                  value={instrumento}
-                  onChange={(e) => {
-                    setInstrumento(e.target.value as '' | 'PSS-10' | 'PCL-5');
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="">Ambos (separados)</option>
-                  <option value="PSS-10">PSS-10 · Estrés percibido (0–40)</option>
-                  <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80)</option>
-                </select>
-              </label>
+      {/* Power BI Visual Slicers Bar */}
+      <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm px-5 py-3.5 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <SlicerPills
+            label="Instrumento"
+            value={instrumento}
+            onChange={(val) => setInstrumento(val)}
+            options={[
+              { value: '', label: 'Todos (Separados)' },
+              { value: 'PSS-10', label: 'PSS-10 (0–40)' },
+              { value: 'PCL-5', label: 'PCL-5 (0–80)' },
+            ]}
+          />
+          <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
+          <SlicerPills
+            label="Agrupar por"
+            accent="slate"
+            value={agruparPor}
+            onChange={(val) => setAgruparPor(val)}
+            options={[
+              { value: 'programa', label: 'Programa' },
+              { value: 'facultad', label: 'Facultad / Área' },
+              { value: 'grupo_etario', label: 'Grupo etario' },
+            ]}
+          />
+        </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Agrupar filas por</span>
-                <select
-                  value={agruparPor}
-                  onChange={(e) => {
-                    setAgruparPor(e.target.value as 'programa' | 'facultad' | 'grupo_etario');
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="programa">Instrumento → Programa</option>
-                  <option value="facultad">Instrumento → Facultad / Área</option>
-                  <option value="grupo_etario">Instrumento → Grupo etario</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Práctica principal</span>
-                <select
-                  value={idPractica}
-                  onChange={(e) => {
-                    setIdPractica(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="">Todas las prácticas</option>
-                  {filtros?.practicas.map((p) => (
-                    <option key={p.id_practica} value={p.id_practica}>
-                      {p.codigo_practica} · {p.nombre_practica}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Programa</span>
-                <select
-                  value={idPrograma}
-                  onChange={(e) => {
-                    setIdPrograma(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="">Todos los programas</option>
-                  {programasFiltrados.map((p) => (
-                    <option key={p.id_programa} value={p.id_programa}>
-                      {p.codigo_programa}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Facultad / Área</span>
-                <select
-                  value={facultad}
-                  onChange={(e) => {
-                    setFacultad(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="">Todas las facultades</option>
-                  {filtros?.facultades.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Grupo etario / Sexo</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    aria-label="Grupo etario"
-                    value={grupoEtario}
-                    onChange={(e) => {
-                      setGrupoEtario(e.target.value);
-                      setPage(1);
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-800"
-                  >
-                    <option value="">Edad</option>
-                    {(filtros?.gruposEtarios || ['18-20', '21-23', '24-26', '27+']).map((g) => (
-                      <option key={g} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Sexo"
-                    value={sexo}
-                    onChange={(e) => {
-                      setSexo(e.target.value);
-                      setPage(1);
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-800"
-                  >
-                    <option value="">Sexo</option>
-                    {(filtros?.sexos || ['F', 'M', 'NO_ESPECIFICADO']).map((s) => (
-                      <option key={s} value={s}>
-                        {s === 'F' ? 'Fem (F)' : s === 'M' ? 'Masc (M)' : 'N/E'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Evento índice (PCL-5)</span>
-                <select
-                  value={categoriaEvento}
-                  onChange={(e) => {
-                    setCategoriaEvento(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
-                >
-                  <option value="">Todos los eventos</option>
-                  {(filtros?.categoriasEvento || []).map((c) => (
-                    <option key={c.codigo_categoria} value={c.codigo_categoria}>
-                      {c.codigo_categoria} · {c.nombre_categoria}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {activeFilterCount > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/70">
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                  <span className="text-slate-500 font-medium">Activos:</span>
-                  {instrumento && (
-                    <span className="px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200 font-semibold">
-                      {instrumento}
-                    </span>
-                  )}
-                  {facultad && (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-700 font-semibold">
-                      {facultad}
-                    </span>
-                  )}
-                  {grupoEtario && (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-700 font-semibold">
-                      {grupoEtario} años
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={limpiarFiltros}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900"
-                >
-                  <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  Limpiar filtros
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((o) => !o)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-semibold transition-colors self-start xl:self-auto"
+        >
+          <Filter className="w-3.5 h-3.5" aria-hidden="true" />
+          Filtros avanzados
+          {activeFilterCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-teal-600 text-white text-[10px] font-bold">
+              {activeFilterCount}
+            </span>
+          )}
+          {filtersOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
       </section>
 
+      {/* Advanced Filters Drawer */}
+      {filtersOpen && (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Fecha de corte
+              </label>
+              <input
+                type="date"
+                value={corte}
+                onChange={(e) => setCorte(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Facultad / Área
+              </label>
+              <select
+                value={facultad}
+                onChange={(e) => setFacultad(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todas las facultades</option>
+                {(filtros?.facultades || []).map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Práctica principal
+              </label>
+              <select
+                value={idPractica}
+                onChange={(e) => setIdPractica(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todas las prácticas</option>
+                {(filtros?.practicas || []).map((p) => (
+                  <option key={p.id_practica} value={String(p.id_practica)}>
+                    {p.codigo_practica} · {p.nombre_practica}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Programa / Cohorte
+              </label>
+              <select
+                value={idPrograma}
+                onChange={(e) => setIdPrograma(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todos los programas</option>
+                {programasFiltrados.map((p) => (
+                  <option key={p.id_programa} value={String(p.id_programa)}>
+                    {p.codigo_programa}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Grupo etario
+              </label>
+              <select
+                value={grupoEtario}
+                onChange={(e) => setGrupoEtario(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todos</option>
+                {(filtros?.gruposEtarios || []).map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Sexo
+              </label>
+              <select
+                value={sexo}
+                onChange={(e) => setSexo(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todos</option>
+                {(filtros?.sexos || []).map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+                Categoría evento (PCL-5)
+              </label>
+              <select
+                value={categoriaEvento}
+                onChange={(e) => setCategoriaEvento(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              >
+                <option value="">Todas</option>
+                {(filtros?.categoriasEvento || []).map((c) => (
+                  <option key={c.id_categoria_evento} value={c.codigo_categoria}>
+                    {c.codigo_categoria} · {c.nombre_categoria}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={limpiarFiltros}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+                Restablecer filtros
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Active Cross-Filter Banner */}
+      <CrossFilterBanner
+        items={crossFilterItems}
+        onClearAll={() => {
+          setCrossDimKey(null);
+          setCrossDirection(null);
+        }}
+      />
+
       {error && (
-        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+        <div className="rounded-2xl bg-rose-50 border border-rose-200 p-4 text-sm text-rose-800">
           {error}
         </div>
       )}
 
-      {/* Top Executive KPI Cards */}
+      {/* KPI Cards */}
       {loading && !data ? (
-        <KpiGridSkeleton count={4} />
+        <KpiGridSkeleton count={2} />
       ) : (
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <KpiCard
-            code="KPI-01 · PSS-10"
-            title="Reducción promedio estrés percibido"
+            code="KPI-01 · PSS-10 (0–40)"
+            title={
+              crossDimKey
+                ? `Reducción Estrés · ${crossDimKey}`
+                : 'Reducción Promedio de Estrés Percibido'
+            }
             value={
               pssTotal?.suprimido
-                ? 'Suprimido'
+                ? 'SUPRIMIDO'
                 : pssTotal?.reduccion_promedio != null
                   ? `${pssTotal.reduccion_promedio > 0 ? '+' : ''}${pssTotal.reduccion_promedio.toFixed(2)}`
                   : '—'
             }
-            unit={pssTotal && !pssTotal.suprimido ? 'pts' : undefined}
-            semaforo={pssTotal?.semaforo || 'SIN_DATOS'}
-            metaLabel="Meta: ≥ 4.0 pts"
-            subtitle={`n = ${pssTotal?.pares_validos ?? 0} pares válidos`}
-            progressPct={
-              pssTotal?.reduccion_promedio != null ? (pssTotal.reduccion_promedio / 6) * 100 : null
+            unit={!pssTotal?.suprimido && pssTotal?.reduccion_promedio != null ? 'pts' : undefined}
+            subtitle={
+              pssTotal
+                ? `n = ${pssTotal.pares_validos} pares · Inicial ${pssTotal.promedio_inicial?.toFixed(1) ?? '—'} → Final ${pssTotal.promedio_final?.toFixed(1) ?? '—'}`
+                : 'Sin pares PSS-10 en este filtro'
             }
+            metaLabel="Meta ≥ 4.0 pts"
+            semaforo={pssTotal?.semaforo || 'SIN_DATOS'}
             accent="teal"
             Icon={Activity}
           />
-
           <KpiCard
-            code="PSS-10 · Pre/Post"
-            title="Puntaje inicial vs. final (0–40)"
-            value={
-              pssTotal?.suprimido
-                ? 'n < 5'
-                : pssTotal?.promedio_inicial != null
-                  ? `${pssTotal.promedio_inicial.toFixed(1)} → ${pssTotal.promedio_final.toFixed(1)}`
-                  : '—'
+            code="KPI-02 · PCL-5 (0–80)"
+            title={
+              crossDimKey
+                ? `Reducción Trauma · ${crossDimKey}`
+                : 'Reducción Promedio de Síntomas de Trauma'
             }
-            subtitle={
-              pssTotal && !pssTotal.suprimido
-                ? `${pssTotal.disminuyeron ?? 0} mejoraron · ${pssTotal.aumentaron ?? 0} subieron`
-                : 'Escala independiente'
-            }
-            accent="teal"
-          />
-
-          <KpiCard
-            code="KPI-02 · PCL-5"
-            title="Reducción síntomas postraumáticos"
             value={
               pclTotal?.suprimido
-                ? 'Suprimido'
+                ? 'SUPRIMIDO'
                 : pclTotal?.reduccion_promedio != null
                   ? `${pclTotal.reduccion_promedio > 0 ? '+' : ''}${pclTotal.reduccion_promedio.toFixed(2)}`
                   : '—'
             }
-            unit={pclTotal && !pclTotal.suprimido ? 'pts' : undefined}
-            semaforo={pclTotal?.semaforo || 'SIN_DATOS'}
-            metaLabel="Meta: ≥ 10.0 pts"
-            subtitle={`n = ${pclTotal?.pares_validos ?? 0} pares válidos`}
-            progressPct={
-              pclTotal?.reduccion_promedio != null ? (pclTotal.reduccion_promedio / 14) * 100 : null
+            unit={!pclTotal?.suprimido && pclTotal?.reduccion_promedio != null ? 'pts' : undefined}
+            subtitle={
+              pclTotal
+                ? `n = ${pclTotal.pares_validos} pares · Inicial ${pclTotal.promedio_inicial?.toFixed(1) ?? '—'} → Final ${pclTotal.promedio_final?.toFixed(1) ?? '—'}`
+                : 'Sin pares PCL-5 en este filtro'
             }
-            accent="sky"
+            metaLabel="Meta ≥ 10.0 pts"
+            semaforo={pclTotal?.semaforo || 'SIN_DATOS'}
+            accent="indigo"
             Icon={HeartPulse}
           />
+        </section>
+      )}
 
-          <KpiCard
-            code="PCL-5 · Pre/Post"
-            title="Puntaje inicial vs. final (0–80)"
-            value={
-              pclTotal?.suprimido
-                ? 'n < 5'
-                : pclTotal?.promedio_inicial != null
-                  ? `${pclTotal.promedio_inicial.toFixed(1)} → ${pclTotal.promedio_final.toFixed(1)}`
-                  : '—'
+      {/* Power BI Visuals: Dumbbell Pre–Post + 100% Stacked Bar */}
+      {loading && !data ? (
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          <div className="lg:col-span-7">
+            <ChartSkeleton height={340} />
+          </div>
+          <div className="lg:col-span-5">
+            <ChartSkeleton height={340} />
+          </div>
+        </section>
+      ) : (
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          <ChartCard
+            className="lg:col-span-7"
+            title={`Dumbbell Pre–Post (${instrumento || dumbbellInst}) por ${etiquetaDimension}`}
+            subtitle="Línea de reducción desde el Promedio Inicial (gris) al Promedio Final (teal). Escala independiente por instrumento."
+            contextBadge={`${dumbbellRows.length} grupos evaluables`}
+            option={chartDumbbellOption}
+            height={340}
+            ariaLabel={`Gráfico Dumbbell Pre-Post ${instrumento || dumbbellInst} por ${etiquetaDimension}`}
+            exportFilename={`RG01_dumbbell_${instrumento || dumbbellInst}_${corte}.png`}
+            interactiveHint
+            extraHeader={
+              !instrumento ? (
+                <div className="inline-flex rounded-lg bg-slate-100 p-0.5 mr-1">
+                  {(['PSS-10', 'PCL-5'] as const).map((inst) => (
+                    <button
+                      key={inst}
+                      type="button"
+                      onClick={() => setDumbbellInst(inst)}
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-colors ${
+                        dumbbellInst === inst
+                          ? 'bg-white text-teal-700 shadow-xs'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {inst}
+                    </button>
+                  ))}
+                </div>
+              ) : null
             }
-            subtitle={
-              pclTotal && !pclTotal.suprimido
-                ? `${pclTotal.disminuyeron ?? 0} mejoraron · ${pclTotal.aumentaron ?? 0} subieron`
-                : 'Mismo evento índice'
-            }
-            accent="sky"
+            onItemClick={(params) => {
+              const row = dumbbellRows[params.dataIndex];
+              if (!row) return;
+              setCrossDimKey((prev) => (prev === row.dim_clave ? null : row.dim_clave));
+            }}
+          />
+
+          <ChartCard
+            className="lg:col-span-5"
+            title="Dirección del Cambio (Apilada al 100 %)"
+            subtitle="Distribución porcentual de pares que disminuyeron, mantuvieron igual o aumentaron puntaje."
+            contextBadge={crossDimKey ? `Filtrado: ${compactLabel(crossDimKey)}` : 'Total periodo'}
+            option={chartStacked100Option}
+            height={340}
+            ariaLabel="Gráfico de barras apiladas al 100% de dirección del cambio"
+            exportFilename={`RG01_direccion_100pct_${corte}.png`}
+            interactiveHint
+            onItemClick={(params) => {
+              const mapDir: Record<string, DirectionFilter> = {
+                Disminuyeron: 'DISMINUYERON',
+                'Sin cambio': 'SIN_CAMBIO',
+                Aumentaron: 'AUMENTARON',
+              };
+              const target = params.seriesName ? mapDir[params.seriesName] : undefined;
+              if (!target) return;
+              setCrossDirection((prev) => (prev === target ? null : target));
+            }}
           />
         </section>
       )}
 
-      {/* 2 Interactive ECharts in Responsive Grid */}
+      {/* Privacy / BI Note */}
+      <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-slate-100/80 border border-slate-200/80 text-xs text-slate-600">
+        <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
+        <p>
+          <strong>Regla de privacidad y rigor BI:</strong> Los promedios y distribuciones se calculan únicamente sobre pares válidos (inicial y final en ventana del mismo estudiante, programa, instrumento y evento índice en PCL-5). Los grupos con <code>n &lt; 5</code> se marcan automáticamente como <strong>SUPRIMIDO</strong>.
+        </p>
+      </div>
+
+      {/* PowerDataTable */}
       {loading && !data ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <ChartSkeleton height={280} />
-          <ChartSkeleton height={280} />
-        </div>
+        <TableSkeleton rows={6} />
       ) : (
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Comparativo Promedio Inicial vs. Final por Instrumento
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                PSS-10 (0–40) y PCL-5 (0–80) se presentan estrictamente separados
-              </p>
-            </div>
-            {totales.some((t) => !t.suprimido && t.promedio_inicial != null) ? (
-              <EChartBox
-                option={chartPrePostOption}
-                height={270}
-                ariaLabel="Gráfico comparativo de puntaje promedio inicial y final por instrumento"
-              />
-            ) : (
-              <EmptyState title="Sin promedios visibles" description="No hay grupos con n ≥ 5 pares válidos en este filtro." icon="filter" />
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Dirección del Cambio en Pares Válidos
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Distribución de estudiantes que disminuyeron, mantuvieron o aumentaron puntaje
-              </p>
-            </div>
-            {totales.some((t) => !t.suprimido && t.pares_validos >= 5) ? (
-              <EChartBox
-                option={chartDireccionOption}
-                height={270}
-                ariaLabel="Gráfico apilado de dirección del cambio en pares válidos"
-              />
-            ) : (
-              <EmptyState title="Sin distribución disponible" description="Aumenta el rango de filtros para obtener al menos 5 pares válidos." icon="filter" />
-            )}
-          </div>
-        </section>
+        <PowerDataTable
+          title={`Matriz Detallada de Evolución por ${etiquetaDimension}`}
+          subtitle="Ordena por cualquier columna, busca en tiempo real o exporta los grupos visibles a Excel (CSV UTF-8)."
+          caption={`Tabla de evolución PSS-10 y PCL-5 agrupada por ${etiquetaDimension}`}
+          data={filasCrossFiltradas}
+          columns={columns}
+          initialSorting={[{ id: 'reduccion_promedio', desc: true }]}
+          searchPlaceholder={`Buscar ${etiquetaDimension.toLowerCase()} o instrumento...`}
+          csvFilename={`RG01_evolucion_${agruparPor}_${corte}.csv`}
+          csvColumns={[
+            { header: etiquetaDimension, accessor: (r) => r.dim_clave },
+            { header: 'Instrumento', accessor: (r) => r.codigo_instrumento },
+            { header: 'Pares Válidos', accessor: (r) => r.pares_validos },
+            { header: 'Suprimido', accessor: (r) => (r.suprimido ? 'SI' : 'NO') },
+            { header: 'Promedio Inicial', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_inicial) },
+            { header: 'Promedio Final', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_final) },
+            { header: 'Reducción Promedio (pts)', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.reduccion_promedio) },
+            { header: 'Disminuyeron', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.disminuyeron) },
+            { header: 'Sin Cambio', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.sin_cambio) },
+            { header: 'Aumentaron', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.aumentaron) },
+            { header: 'Semáforo', accessor: (r) => r.semaforo },
+          ]}
+        />
       )}
-
-      {/* Detailed Sortable Table */}
-      {loading && !data ? (
-        <TableSkeleton rows={6} cols={9} />
-      ) : (
-        <section className="space-y-3">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-card overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <span className="w-1.5 h-5 rounded-full bg-teal-500 shrink-0" aria-hidden="true" />
-                <h3 id={captionId} className="font-display text-sm font-bold text-slate-900 tracking-tight">
-                  Evolución pareada por Instrumento y {etiquetaDimension}
-                </h3>
-              </div>
-              {pag && (
-                <span className="text-xs font-medium text-slate-500 tabular-nums">
-                  Mostrando <strong className="text-slate-800">{filasOrdenadas.length}</strong> de{' '}
-                  <strong className="text-slate-800">{pag.totalRegistros.toLocaleString()}</strong> grupos
-                </span>
-              )}
-            </div>
-
-            {!filasOrdenadas.length ? (
-              <EmptyState
-                title="No se encontraron pares válidos"
-                description="Ajusta el semestre, programa o fecha de corte para consultar pares iniciales y finales completados en ventana."
-                actionLabel={activeFilterCount > 0 ? 'Limpiar filtros' : undefined}
-                onAction={activeFilterCount > 0 ? limpiarFiltros : undefined}
-                icon="filter"
-              />
-            ) : (
-              <div
-                tabIndex={0}
-                role="region"
-                aria-labelledby={captionId}
-                className="table-wrapper table-wrapper--paged !border-0 !rounded-none"
-              >
-                <table className="mwg-table">
-                  <caption className="sr-only">
-                    Evolución pareada de PSS-10 y PCL-5 agrupada por {etiquetaDimension} al corte {formatFechaEs(corte)}
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Instrumento</th>
-                      <th scope="col">{etiquetaDimension}</th>
-                      <th scope="col">
-                        <button
-                          type="button"
-                          onClick={() => toggleSort('pares')}
-                          className="inline-flex items-center gap-1 hover:text-slate-900 uppercase tracking-wider"
-                        >
-                          Pares (n)
-                          <ArrowUpDown className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      </th>
-                      <th scope="col">Inicial</th>
-                      <th scope="col">Final</th>
-                      <th scope="col">
-                        <button
-                          type="button"
-                          onClick={() => toggleSort('reduccion')}
-                          className="inline-flex items-center gap-1 hover:text-slate-900 uppercase tracking-wider"
-                        >
-                          Reducción
-                          <ArrowUpDown className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      </th>
-                      <th scope="col">Mejora / = / Sube</th>
-                      <th scope="col">Semáforo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filasOrdenadas.map((r: any) => (
-                      <tr key={`${r.codigo_instrumento}-${r.dim_clave}`}>
-                        <th scope="row">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold border ${
-                              r.codigo_instrumento === 'PSS-10'
-                                ? 'bg-teal-50 text-teal-800 border-teal-200'
-                                : 'bg-sky-50 text-sky-800 border-sky-200'
-                            }`}
-                          >
-                            {r.codigo_instrumento}
-                          </span>
-                          {r.version_instrumento && (
-                            <div className="text-[11px] font-normal text-slate-400 mt-0.5">
-                              {r.version_instrumento}
-                            </div>
-                          )}
-                        </th>
-                        <td data-label={etiquetaDimension}>
-                          <div className="font-semibold text-slate-900">
-                            {agruparPor === 'programa' ? compactPrograma(r.dim_clave) : r.dim_clave}
-                          </div>
-                          {agruparPor === 'programa' && (r.dim_subtitulo || r.estado_programa) && (
-                            <div
-                              className="text-[11px] text-slate-500 truncate max-w-[220px]"
-                              title={r.dim_subtitulo}
-                            >
-                              {r.dim_subtitulo}
-                              {r.estado_programa ? ` · ${r.estado_programa}` : ''}
-                            </div>
-                          )}
-                        </td>
-                        <td data-label="Pares (n)" className="tabular-nums font-semibold text-slate-700">
-                          {r.pares_validos}
-                        </td>
-                        <td data-label="Inicial" className="tabular-nums text-slate-600">
-                          {r.suprimido ? 'Suprimido' : r.promedio_inicial != null ? r.promedio_inicial.toFixed(2) : '—'}
-                        </td>
-                        <td data-label="Final" className="tabular-nums text-slate-600">
-                          {r.suprimido ? 'Suprimido' : r.promedio_final != null ? r.promedio_final.toFixed(2) : '—'}
-                        </td>
-                        <td data-label="Reducción" className="tabular-nums font-bold">
-                          {r.suprimido ? (
-                            <span className="text-slate-400 font-normal">n &lt; 5</span>
-                          ) : r.reduccion_promedio != null ? (
-                            <span className={r.reduccion_promedio >= 0 ? 'text-emerald-700' : 'text-rose-700'}>
-                              {r.reduccion_promedio > 0 ? '+' : ''}
-                              {r.reduccion_promedio.toFixed(2)} pts
-                            </span>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td data-label="Mejora / = / Sube" className="tabular-nums text-xs">
-                          {r.suprimido ? (
-                            <span className="text-slate-400">—</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 font-medium">
-                              <span className="text-emerald-700 font-bold">{r.disminuyeron ?? 0}</span>
-                              <span className="text-slate-300">/</span>
-                              <span className="text-slate-500">{r.sin_cambio ?? 0}</span>
-                              <span className="text-slate-300">/</span>
-                              <span className="text-rose-600 font-semibold">{r.aumentaron ?? 0}</span>
-                            </span>
-                          )}
-                        </td>
-                        <td data-label="Semáforo">
-                          <SemaforoBadge estado={r.suprimido ? 'SUPRIMIDO' : r.semaforo || 'SIN_DATOS'} size="xs" />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-
-                  {totales.length > 0 && (
-                    <tfoot>
-                      {totales.map((t: any) => (
-                        <tr key={`tot-${t.codigo_instrumento}`} className="text-xs font-semibold">
-                          <th scope="row" className="whitespace-nowrap">
-                            <div className="font-bold text-slate-900">TOTAL {t.codigo_instrumento}</div>
-                            <div className="text-[11px] font-normal text-slate-500">
-                              {t.codigo_instrumento === 'PSS-10' ? 'Escala 0–40' : 'Escala 0–80'}
-                            </div>
-                          </th>
-                          <td className="text-slate-400">—</td>
-                          <td data-label="Pares (n)" className="tabular-nums font-bold text-slate-900">
-                            {t.pares_validos.toLocaleString()}
-                          </td>
-                          <td data-label="Inicial" className="tabular-nums font-bold">
-                            {t.suprimido ? 'Suprimido' : t.promedio_inicial != null ? t.promedio_inicial.toFixed(2) : '—'}
-                          </td>
-                          <td data-label="Final" className="tabular-nums font-bold">
-                            {t.suprimido ? 'Suprimido' : t.promedio_final != null ? t.promedio_final.toFixed(2) : '—'}
-                          </td>
-                          <td data-label="Reducción" className="tabular-nums font-bold text-teal-800">
-                            {t.suprimido
-                              ? 'n < 5'
-                              : t.reduccion_promedio != null
-                                ? `${t.reduccion_promedio > 0 ? '+' : ''}${t.reduccion_promedio.toFixed(2)} pts`
-                                : '—'}
-                          </td>
-                          <td data-label="Mejora / = / Sube" className="tabular-nums">
-                            {t.suprimido
-                              ? '—'
-                              : `${t.disminuyeron ?? 0} / ${t.sin_cambio ?? 0} / ${t.aumentaron ?? 0}`}
-                          </td>
-                          <td data-label="Semáforo">
-                            <SemaforoBadge estado={t.suprimido ? 'SUPRIMIDO' : t.semaforo || 'SIN_DATOS'} size="xs" />
-                          </td>
-                        </tr>
-                      ))}
-                    </tfoot>
-                  )}
-                </table>
-              </div>
-            )}
-          </div>
-
-          {pag && pag.totalPaginas > 1 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3 rounded-2xl border border-slate-200/80 shadow-card">
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <span>Filas por página:</span>
-                <select
-                  aria-label="Filas por página"
-                  value={pageSize}
-                  onChange={(e) => {
-                    setPageSize(Number(e.target.value));
-                    setPage(1);
-                  }}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs bg-white font-semibold"
-                >
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                  Anterior
-                </button>
-                <span className="text-xs font-semibold text-slate-700 px-2 tabular-nums">
-                  {pag.page} / {pag.totalPaginas}
-                </span>
-                <button
-                  type="button"
-                  disabled={page >= pag.totalPaginas}
-                  onClick={() => setPage((p) => Math.min(pag.totalPaginas, p + 1))}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40"
-                >
-                  Siguiente
-                  <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Compact methodological rules footer */}
-      <details className="rounded-2xl border border-slate-200/80 bg-white px-5 py-3 text-xs text-slate-600 shadow-card">
-        <summary className="cursor-pointer font-semibold text-slate-700 inline-flex items-center gap-2 select-none">
-          <Info className="w-4 h-4 text-teal-600" aria-hidden="true" />
-          Reglas metodológicas y privacidad estadística de RG-01
-        </summary>
-        <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4 leading-relaxed">
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Diferencia pareada (pts)</strong>
-            <code>PuntajeInicial − PuntajeFinal</code>. Valores positivos indican disminución de síntomas. PSS-10 y PCL-5 nunca se combinan.
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Par válido en ventana</strong>
-            Exige evaluación inicial y final vigentes, válidas, dentro de ventana (<code>en_ventana = 1</code>) y mismo evento índice en PCL-5.
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Supresión por privacidad</strong>
-            Todo grupo con menos de 5 pares válidos (<code>n &lt; 5</code>) se suprime automáticamente.
-          </div>
-        </div>
-      </details>
     </div>
   );
 }

@@ -1,39 +1,56 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ColumnDef } from '@tanstack/react-table';
 import {
   AlertTriangle,
   Calendar,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   ClipboardCheck,
   Clock,
   Filter,
   Info,
-  Search,
   X,
   XCircle,
 } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
 import { AiReportButton } from './AiReportButton';
 import { KpiCard } from './KpiCard';
-import { EChartBox } from './EChartBox';
-import { ChartSkeleton, EmptyState, KpiGridSkeleton, TableSkeleton } from './UiStates';
+import { ChartCard } from './ChartCard';
+import { DataBarCell, PowerDataTable } from './PowerDataTable';
+import { CrossFilterBanner, PowerBiHintBadge, SlicerPills } from './PowerBiControls';
+import { ChartSkeleton, KpiGridSkeleton, TableSkeleton } from './UiStates';
 import {
   CHART_COLORS,
   EXECUTIVE_AXIS_LABEL,
   EXECUTIVE_SPLIT_LINE,
-  barGradient,
-  metaMarkLine,
 } from '@/lib/chartTheme';
 
 interface CumplimientoReportProps {
   filtros: FiltrosResponse | null;
   corteInicial: string;
   semestre: string;
+}
+
+interface OportunidadRow {
+  id_oportunidad: number;
+  codigo_anonimizado: string;
+  facultad_o_area: string;
+  codigo_programa: string;
+  codigo_practica: string;
+  codigo_instrumento: 'PSS-10' | 'PCL-5';
+  momento: 'INICIAL' | 'FINAL';
+  codigo_evento_local: string | null;
+  categoria_evento: string | null;
+  fecha_prevista: string | null;
+  fecha_realizacion: string | null;
+  puntaje_total: number | null;
+  estado_evaluacion: string;
+  es_elegible: boolean;
+  es_completada_elegible: boolean;
+  par_valido: boolean;
 }
 
 function formatFechaEs(iso: string | null | undefined): string {
@@ -82,36 +99,33 @@ function EstadoEvaluacionBadge({ estado }: { estado: string }) {
   }
 }
 
+const ESTADO_LABELS: Record<string, string> = {
+  COMPLETADA_EN_VENTANA: 'En ventana',
+  COMPLETADA_TARDIA: 'Tardía',
+  PENDIENTE_EN_VENTANA: 'Pendiente',
+  VENCIDA: 'Vencida',
+};
+
 export function CumplimientoReport({ filtros, corteInicial, semestre }: CumplimientoReportProps) {
   const [corte, setCorte] = useState(corteInicial);
   const [idPrograma, setIdPrograma] = useState('');
   const [facultad, setFacultad] = useState('');
   const [instrumento, setInstrumento] = useState<'' | 'PSS-10' | 'PCL-5'>('');
   const [categoriaEvento, setCategoriaEvento] = useState('');
-  const [estado, setEstado] = useState('');
-  const [buscarInput, setBuscarInput] = useState('');
-  const [buscar, setBuscar] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Slicers + Cross-filtering local instantáneo
+  const [crossMomento, setCrossMomento] = useState<'' | 'INICIAL' | 'FINAL'>('');
+  const [crossEstado, setCrossEstado] = useState<string>('');
 
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const captionId = useId();
-
   useEffect(() => {
-    const t = setTimeout(() => {
-      setBuscar(buscarInput.trim());
-      setPage(1);
-    }, 260);
-    return () => clearTimeout(t);
-  }, [buscarInput]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [semestre]);
+    setCrossMomento('');
+    setCrossEstado('');
+  }, [semestre, corte, idPrograma, facultad, instrumento, categoriaEvento]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -124,625 +138,665 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
         facultad: facultad || undefined,
         instrumento: instrumento || undefined,
         categoria_evento: categoriaEvento || undefined,
-        estado: estado || undefined,
-        buscar: buscar || undefined,
-        page,
-        pageSize,
+        page: 1,
+        pageSize: 300,
       });
       setData(res);
     } catch (e: any) {
-      setError(e.message || 'No se pudo cargar el control de evaluaciones psicológicas.');
+      setError(e.message || 'No se pudo cargar el control de cumplimiento de evaluaciones.');
     } finally {
       setLoading(false);
     }
-  }, [corte, semestre, idPrograma, facultad, instrumento, categoriaEvento, estado, buscar, page, pageSize]);
+  }, [corte, semestre, idPrograma, facultad, instrumento, categoriaEvento]);
 
   useEffect(() => {
     cargar();
   }, [cargar]);
 
-  const limpiarFiltros = () => {
-    setIdPrograma('');
-    setFacultad('');
-    setInstrumento('');
-    setCategoriaEvento('');
-    setEstado('');
-    setBuscarInput('');
-    setBuscar('');
-    setPage(1);
-  };
-
-  const activeFilterCount = [idPrograma, facultad, instrumento, categoriaEvento, estado, buscar].filter(Boolean).length;
+  const activeFilterCount = [idPrograma, facultad, categoriaEvento].filter(Boolean).length;
   const rt = data?.resumen_total;
-  const pag = data?.paginacion;
+  const oportunidadesRaw: OportunidadRow[] = data?.oportunidades || [];
 
   const programasFiltrados = (filtros?.programas || []).filter(
     (p) => !semestre || p.periodo_academico === semestre,
   );
 
-  // Chart 1: Compliance Rate vs 90% Target Bar
-  const chartTasaOption = useMemo(() => {
-    if (!rt) return null;
-    const total = Math.max(1, Number(rt.elegibles || 0));
-    const pctVentana = Number((((rt.completadas_en_ventana || 0) / total) * 100).toFixed(1));
-    const pctTotal = rt.tasa_cumplimiento != null ? Number(Number(rt.tasa_cumplimiento).toFixed(1)) : 0;
-    const pctVencidas = Number((((rt.vencidas || 0) / total) * 100).toFixed(1));
+  // Oportunidades filtradas por Cross-Filtering (Momento / Estado)
+  const oportunidadesFiltradas = useMemo(() => {
+    return oportunidadesRaw.filter((o) => {
+      if (crossMomento && o.momento !== crossMomento) return false;
+      if (crossEstado && o.estado_evaluacion !== crossEstado) return false;
+      return true;
+    });
+  }, [oportunidadesRaw, crossMomento, crossEstado]);
+
+  // Recalcular KPI-04 si hay crossMomento activo (respetando n < 5)
+  const effectiveKpi = useMemo(() => {
+    if (!crossMomento) return rt;
+    const subset = oportunidadesRaw.filter((o) => o.momento === crossMomento);
+    const elegibles = subset.filter((o) => o.es_elegible).length;
+    const completadasElegibles = subset.filter((o) => o.es_completada_elegible).length;
+    const enVentana = subset.filter((o) => o.estado_evaluacion === 'COMPLETADA_EN_VENTANA').length;
+    const tardias = subset.filter((o) => o.estado_evaluacion === 'COMPLETADA_TARDIA').length;
+    const pendientes = subset.filter((o) => o.estado_evaluacion === 'PENDIENTE_EN_VENTANA').length;
+    const vencidas = subset.filter((o) => o.estado_evaluacion === 'VENCIDA').length;
+    const tasa = elegibles > 0 ? Number(((completadasElegibles / elegibles) * 100).toFixed(1)) : null;
+    const semaforo =
+      elegibles === 0
+        ? 'SIN_DATOS'
+        : elegibles < 5
+          ? 'SUPRIMIDO'
+          : (tasa ?? 0) >= 90
+            ? 'BUENO'
+            : (tasa ?? 0) >= 75
+              ? 'REGULAR'
+              : 'MALO';
+    return {
+      elegibles,
+      elegibles_completadas: completadasElegibles,
+      completadas_en_ventana: enVentana,
+      completadas_tardias: tardias,
+      pendientes_en_ventana: pendientes,
+      vencidas,
+      tasa_cumplimiento: elegibles >= 5 ? tasa : null,
+      suprimido: elegibles > 0 && elegibles < 5,
+      semaforo,
+    };
+  }, [crossMomento, oportunidadesRaw, rt]);
+
+  // Visual 1: Barras Apiladas por Momento (INICIAL vs FINAL) segmentadas por Estado
+  const chartMomentoStackedOption = useMemo(() => {
+    if (oportunidadesRaw.length === 0) return null;
+    const momentos: Array<'INICIAL' | 'FINAL'> = ['INICIAL', 'FINAL'];
+
+    const countBy = (m: 'INICIAL' | 'FINAL', est: string) =>
+      oportunidadesRaw.filter((o) => o.momento === m && o.estado_evaluacion === est).length;
+
+    const cellOpacity = (m: 'INICIAL' | 'FINAL', est: string) => {
+      const matchM = !crossMomento || crossMomento === m;
+      const matchE = !crossEstado || crossEstado === est;
+      return matchM && matchE ? 1 : 0.24;
+    };
+
+    const states = [
+      { key: 'COMPLETADA_EN_VENTANA', name: 'En ventana', color: CHART_COLORS.emerald },
+      { key: 'COMPLETADA_TARDIA', name: 'Tardía', color: CHART_COLORS.amber },
+      { key: 'PENDIENTE_EN_VENTANA', name: 'Pendiente', color: CHART_COLORS.sky },
+      { key: 'VENCIDA', name: 'Vencida', color: CHART_COLORS.rose },
+    ];
 
     return {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
-        formatter: '{b}: <strong>{c}%</strong>',
       },
-      grid: { left: 16, right: 20, top: 28, bottom: 26, containLabel: true },
+      legend: {
+        top: 0,
+        right: 0,
+        icon: 'roundRect',
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: { color: '#475569', fontSize: 11 },
+      },
+      grid: { left: 16, right: 20, top: 38, bottom: 24, containLabel: true },
       xAxis: {
         type: 'category',
-        data: ['Cumplimiento Total', 'En Ventana', 'Vencidas'],
+        data: ['INICIAL', 'FINAL'],
         axisLine: { lineStyle: { color: '#E2E8F0' } },
         axisTick: { show: false },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
+        axisLabel: { ...EXECUTIVE_AXIS_LABEL, fontWeight: 700 },
       },
       yAxis: {
         type: 'value',
-        max: 100,
-        name: 'Porcentaje (%)',
+        name: 'Oportunidades',
         nameTextStyle: { color: '#64748B', fontSize: 11 },
-        axisLabel: { ...EXECUTIVE_AXIS_LABEL, formatter: '{value}%' },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
         splitLine: EXECUTIVE_SPLIT_LINE,
       },
-      series: [
-        {
-          name: 'Porcentaje',
-          type: 'bar',
-          barMaxWidth: 48,
-          data: [
-            {
-              value: pctTotal,
-              itemStyle: {
-                borderRadius: [8, 8, 0, 0],
-                color: pctTotal >= 90 ? barGradient('#14B8A6', '#0D9488') : barGradient('#6366F1', '#4F46E5'),
-              },
-            },
-            {
-              value: pctVentana,
-              itemStyle: { borderRadius: [8, 8, 0, 0], color: barGradient('#10B981', '#059669') },
-            },
-            {
-              value: pctVencidas,
-              itemStyle: { borderRadius: [8, 8, 0, 0], color: barGradient('#F43F5E', '#E11D48') },
-            },
-          ],
-          markLine: metaMarkLine(90, 'Meta ≥ 90%', '#4F46E5'),
+      series: states.map((st) => ({
+        name: st.name,
+        type: 'bar',
+        stack: 'momento',
+        barMaxWidth: 68,
+        label: {
+          show: true,
+          position: 'inside',
+          color: '#ffffff',
+          fontSize: 11,
+          fontWeight: 700,
+          formatter: (p: any) => (p.value > 0 ? String(p.value) : ''),
         },
-      ],
+        data: momentos.map((m) => ({
+          value: countBy(m, st.key),
+          itemStyle: {
+            color: st.color,
+            opacity: cellOpacity(m, st.key),
+          },
+        })),
+      })),
     };
-  }, [rt]);
+  }, [oportunidadesRaw, crossMomento, crossEstado]);
 
-  // Chart 2: Donut of Evaluation States
-  const chartEstadosOption = useMemo(() => {
-    if (!rt) return null;
-    const pieData = [
-      { value: rt.completadas_en_ventana ?? 0, name: 'En ventana', itemStyle: { color: CHART_COLORS.emerald } },
-      { value: rt.completadas_tardias ?? 0, name: 'Tardía', itemStyle: { color: CHART_COLORS.amber } },
-      { value: rt.pendientes_en_ventana ?? 0, name: 'Pendiente', itemStyle: { color: CHART_COLORS.sky } },
-      { value: rt.vencidas ?? 0, name: 'Vencida', itemStyle: { color: CHART_COLORS.rose } },
-    ].filter((d) => d.value > 0);
+  // Visual 2: Gauge / Velocímetro de KPI-04 frente a meta operativa 90%
+  const chartGaugeKpi04Option = useMemo(() => {
+    if (!effectiveKpi) return null;
+    const tasa = effectiveKpi.suprimido ? 0 : Number(effectiveKpi.tasa_cumplimiento ?? 0);
 
     return {
       tooltip: {
-        trigger: 'item',
-        formatter: '{b}: <strong>{c}</strong> oportunidades ({d}%)',
-      },
-      legend: {
-        bottom: 0,
-        icon: 'circle',
-        itemWidth: 9,
-        itemHeight: 9,
-        textStyle: { color: '#475569', fontSize: 11 },
+        formatter: () =>
+          `<strong>KPI-04 · Cumplimiento</strong><br/>Completadas elegibles: <strong>${effectiveKpi.elegibles_completadas ?? 0} de ${effectiveKpi.elegibles ?? 0}</strong><br/>Meta operativa: ≥ 90.0%`,
       },
       series: [
         {
-          name: 'Estado evaluación',
-          type: 'pie',
-          radius: ['50%', '75%'],
-          center: ['50%', '43%'],
-          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-          label: { show: false },
-          data: pieData,
+          type: 'gauge',
+          startAngle: 205,
+          endAngle: -25,
+          min: 0,
+          max: 100,
+          splitNumber: 5,
+          radius: '92%',
+          center: ['50%', '62%'],
+          axisLine: {
+            lineStyle: {
+              width: 16,
+              color: [
+                [0.75, '#F43F5E'],
+                [0.9, '#F59E0B'],
+                [1, '#10B981'],
+              ],
+            },
+          },
+          pointer: {
+            icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
+            length: '52%',
+            width: 8,
+            offsetCenter: [0, '-18%'],
+            itemStyle: { color: '#0F172A' },
+          },
+          axisTick: { distance: -16, length: 5, lineStyle: { color: '#fff', width: 1 } },
+          splitLine: { distance: -16, length: 16, lineStyle: { color: '#fff', width: 2 } },
+          axisLabel: { color: '#64748B', distance: 22, fontSize: 10, formatter: '{value}%' },
+          title: { offsetCenter: [0, '24%'], fontSize: 11, color: '#64748B', fontWeight: 600 },
+          detail: {
+            valueAnimation: true,
+            formatter: () =>
+              effectiveKpi.suprimido
+                ? 'n < 5'
+                : effectiveKpi.tasa_cumplimiento != null
+                  ? `${Number(effectiveKpi.tasa_cumplimiento).toFixed(1)}%`
+                  : 'N/A',
+            color: '#0F172A',
+            fontSize: 24,
+            fontWeight: 800,
+            offsetCenter: [0, '2%'],
+          },
+          data: [{ value: Number(tasa.toFixed(1)), name: 'Meta operativa ≥ 90%' }],
         },
       ],
     };
-  }, [rt]);
+  }, [effectiveKpi]);
+
+  // Columnas PowerDataTable
+  const columns = useMemo<ColumnDef<OportunidadRow, any>[]>(
+    () => [
+      {
+        accessorKey: 'codigo_anonimizado',
+        header: 'Estudiante',
+        cell: ({ row }) => (
+          <div>
+            <div className="font-bold text-slate-900 tabular-nums">
+              {row.original.codigo_anonimizado}
+            </div>
+            <div className="text-[11px] text-slate-500">{row.original.facultad_o_area}</div>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'codigo_programa',
+        header: 'Programa',
+        cell: ({ row }) => (
+          <span className="font-semibold text-slate-800">
+            {compactPrograma(row.original.codigo_programa)}
+          </span>
+        ),
+      },
+      {
+        id: 'instrumento_momento',
+        accessorFn: (r) => `${r.codigo_instrumento} ${r.momento}`,
+        header: 'Instrumento / Momento',
+        cell: ({ row }) => (
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`px-2 py-0.5 rounded-md text-xs font-bold ${
+                row.original.codigo_instrumento === 'PSS-10'
+                  ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                  : 'bg-sky-50 text-sky-800 border border-sky-200'
+              }`}
+            >
+              {row.original.codigo_instrumento}
+            </span>
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[11px] font-semibold">
+              {row.original.momento}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'fecha_prevista',
+        header: 'Prevista / Realizada',
+        cell: ({ row }) => (
+          <div className="text-xs tabular-nums">
+            <div className="text-slate-600">Prev: {formatFechaEs(row.original.fecha_prevista)}</div>
+            <div className="text-slate-900 font-semibold">
+              Real: {formatFechaEs(row.original.fecha_realizacion)}
+            </div>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'puntaje_total',
+        header: 'Puntaje',
+        cell: ({ row }) => {
+          const val = row.original.puntaje_total;
+          const max = row.original.codigo_instrumento === 'PSS-10' ? 40 : 80;
+          return (
+            <DataBarCell
+              value={val}
+              max={max}
+              display={val != null ? `${val} / ${max}` : '—'}
+              tone={row.original.codigo_instrumento === 'PSS-10' ? 'teal' : 'indigo'}
+            />
+          );
+        },
+      },
+      {
+        accessorKey: 'par_valido',
+        header: 'Par válido',
+        cell: ({ getValue }) =>
+          getValue() ? (
+            <span className="inline-flex px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
+              Sí
+            </span>
+          ) : (
+            <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[11px] font-semibold">
+              No
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'estado_evaluacion',
+        header: 'Estado',
+        cell: ({ getValue }) => <EstadoEvaluacionBadge estado={String(getValue())} />,
+      },
+    ],
+    [],
+  );
+
+  const crossFilterItems = useMemo(() => {
+    const items: Array<{ label: string; value: string; onClear: () => void }> = [];
+    if (crossMomento) {
+      items.push({
+        label: 'Momento',
+        value: crossMomento,
+        onClear: () => setCrossMomento(''),
+      });
+    }
+    if (crossEstado) {
+      items.push({
+        label: 'Estado',
+        value: ESTADO_LABELS[crossEstado] || crossEstado,
+        onClear: () => setCrossEstado(''),
+      });
+    }
+    return items;
+  }, [crossMomento, crossEstado]);
 
   return (
     <div className="space-y-5">
-      {/* Header & Collapsible Filter Bar */}
-      <section className="rounded-2xl border border-slate-200/80 bg-white shadow-card overflow-hidden">
-        <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200/80">
-                RO-02
-              </span>
-              <h2 className="font-display text-lg font-bold text-slate-900 tracking-tight">
-                Control de Evaluaciones Psicológicas Pendientes y Completadas (KPI-04)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Semestre <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Corte{' '}
-              <strong className="text-slate-700">{formatFechaEs(corte)}</strong> · Regla D01 activa
-            </p>
-          </div>
-
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              <Filter className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-              <span>Filtros</span>
-              {activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-[10px] font-bold text-white">
-                  {activeFilterCount}
-                </span>
-              )}
-              {filtersOpen ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
-            </button>
-
-            <AiReportButton
-              reporte="RO-02"
-              corte={data?.corte || corte}
-              disabled={loading || !rt}
-              filtros={{ semestre, idPrograma, facultad, instrumento, categoriaEvento, estado }}
-              kpis={
-                rt
-                  ? {
-                      elegibles: rt.elegibles,
-                      completadas_en_ventana: rt.completadas_en_ventana,
-                      completadas_tardias: rt.completadas_tardias,
-                      pendientes_en_ventana: rt.pendientes_en_ventana,
-                      vencidas: rt.vencidas,
-                      tasa_cumplimiento_pct: rt.tasa_cumplimiento,
-                      semaforo: rt.semaforo,
-                    }
-                  : null
-              }
-            />
+            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold tracking-wider uppercase">
+              RO-02 · Reporte Operativo
+            </span>
+            <PowerBiHintBadge />
+            <span className="text-xs text-slate-500 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+              Corte: <strong className="text-slate-700">{formatFechaEs(data?.corte || corte)}</strong>
+            </span>
           </div>
+          <h2 className="text-xl font-bold text-slate-900 font-display tracking-tight mt-1">
+            Control de Evaluaciones y Cumplimiento en Ventana
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Monitoreo de oportunidades elegibles (KPI-04, meta ≥ 90%), detección de atrasos entre momento INICIAL y FINAL y trazabilidad de pares válidos.
+          </p>
         </div>
 
-        {filtersOpen && (
-          <div className="px-5 pb-5 pt-3 border-t border-slate-100 bg-slate-50/50 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Fecha de corte</span>
-                <div className="relative">
-                  <Calendar className="w-3.5 h-3.5 text-teal-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="date"
-                    value={corte}
-                    onChange={(e) => {
-                      setCorte(e.target.value);
-                      setPage(1);
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-xs font-medium text-slate-800"
-                  />
-                </div>
-              </label>
+        <AiReportButton
+          reporte="RO-02"
+          corte={data?.corte || corte}
+          filtros={{
+            semestre: semestre || 'TODOS',
+            instrumento: instrumento || 'AMBOS',
+            momento: crossMomento || 'AMBOS',
+            estado: crossEstado || 'TODOS',
+          }}
+          kpis={effectiveKpi || null}
+          grupos={
+            effectiveKpi && Number(effectiveKpi.elegibles || 0) >= 5
+              ? [
+                  {
+                    nombre: crossMomento ? `Cumplimiento ${crossMomento}` : 'Cumplimiento Global',
+                    n: Number(effectiveKpi.elegibles || 0),
+                    valor: effectiveKpi.tasa_cumplimiento,
+                    semaforo: effectiveKpi.semaforo,
+                  },
+                ]
+              : []
+          }
+          disabled={loading || !data}
+        />
+      </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Instrumento</span>
-                <select
-                  value={instrumento}
-                  onChange={(e) => {
-                    setInstrumento(e.target.value as '' | 'PSS-10' | 'PCL-5');
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todos (PSS-10 y PCL-5)</option>
-                  <option value="PSS-10">PSS-10</option>
-                  <option value="PCL-5">PCL-5</option>
-                </select>
-              </label>
+      {/* Power BI Visual Slicers */}
+      <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm px-5 py-3.5 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <SlicerPills
+            label="Instrumento"
+            value={instrumento}
+            onChange={(val) => setInstrumento(val)}
+            options={[
+              { value: '', label: 'Ambos' },
+              { value: 'PSS-10', label: 'PSS-10' },
+              { value: 'PCL-5', label: 'PCL-5' },
+            ]}
+          />
+          <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
+          <SlicerPills
+            label="Momento"
+            accent="indigo"
+            value={crossMomento}
+            onChange={(val) => setCrossMomento(val)}
+            options={[
+              { value: '', label: 'Todos' },
+              { value: 'INICIAL', label: 'INICIAL' },
+              { value: 'FINAL', label: 'FINAL' },
+            ]}
+          />
+          <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
+          <SlicerPills
+            label="Estado"
+            accent="slate"
+            value={crossEstado}
+            onChange={(val) => setCrossEstado(val)}
+            options={[
+              { value: '', label: 'Todos' },
+              { value: 'COMPLETADA_EN_VENTANA', label: 'En ventana' },
+              { value: 'COMPLETADA_TARDIA', label: 'Tardía' },
+              { value: 'PENDIENTE_EN_VENTANA', label: 'Pendiente' },
+              { value: 'VENCIDA', label: 'Vencida' },
+            ]}
+          />
+        </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Programa</span>
-                <select
-                  value={idPrograma}
-                  onChange={(e) => {
-                    setIdPrograma(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todos los programas</option>
-                  {programasFiltrados.map((p) => (
-                    <option key={p.id_programa} value={p.id_programa}>
-                      {p.codigo_programa}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Estado de evaluación</span>
-                <select
-                  value={estado}
-                  onChange={(e) => {
-                    setEstado(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todos los estados</option>
-                  <option value="COMPLETADA_EN_VENTANA">Completada en ventana</option>
-                  <option value="COMPLETADA_TARDIA">Completada tardía</option>
-                  <option value="PENDIENTE_EN_VENTANA">Pendiente en ventana</option>
-                  <option value="VENCIDA">Vencida</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Facultad / Área</span>
-                <select
-                  value={facultad}
-                  onChange={(e) => {
-                    setFacultad(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todas las facultades</option>
-                  {filtros?.facultades.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Evento índice (PCL-5)</span>
-                <select
-                  value={categoriaEvento}
-                  onChange={(e) => {
-                    setCategoriaEvento(e.target.value);
-                    setPage(1);
-                  }}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todos los eventos</option>
-                  {(filtros?.categoriasEvento || []).map((c) => (
-                    <option key={c.codigo_categoria} value={c.codigo_categoria}>
-                      {c.codigo_categoria} · {c.nombre_categoria}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block sm:col-span-2">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Buscar estudiante (código)</span>
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="search"
-                    value={buscarInput}
-                    onChange={(e) => setBuscarInput(e.target.value)}
-                    placeholder="Ej. UNT26-EST-0015"
-                    className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-xs font-medium text-slate-800 placeholder:text-slate-400"
-                  />
-                </div>
-              </label>
-            </div>
-
-            {activeFilterCount > 0 && (
-              <div className="flex justify-end pt-2 border-t border-slate-200/70">
-                <button
-                  type="button"
-                  onClick={limpiarFiltros}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900"
-                >
-                  <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  Limpiar filtros
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((o) => !o)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-semibold transition-colors self-start xl:self-auto"
+        >
+          <Filter className="w-3.5 h-3.5" aria-hidden="true" />
+          Filtros
+          {activeFilterCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-teal-600 text-white text-[10px] font-bold">
+              {activeFilterCount}
+            </span>
+          )}
+          {filtersOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
       </section>
 
+      {filtersOpen && (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Fecha de corte
+            </label>
+            <input
+              type="date"
+              value={corte}
+              onChange={(e) => setCorte(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Programa
+            </label>
+            <select
+              value={idPrograma}
+              onChange={(e) => setIdPrograma(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white"
+            >
+              <option value="">Todos</option>
+              {programasFiltrados.map((p) => (
+                <option key={p.id_programa} value={String(p.id_programa)}>
+                  {p.codigo_programa}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Facultad
+            </label>
+            <select
+              value={facultad}
+              onChange={(e) => setFacultad(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white"
+            >
+              <option value="">Todas</option>
+              {(filtros?.facultades || []).map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Categoría evento (PCL-5)
+            </label>
+            <select
+              value={categoriaEvento}
+              onChange={(e) => setCategoriaEvento(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white"
+            >
+              <option value="">Todas</option>
+              {(filtros?.categoriasEvento || []).map((c) => (
+                <option key={c.id_categoria_evento} value={c.codigo_categoria}>
+                  {c.codigo_categoria} · {c.nombre_categoria}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIdPrograma('');
+                setFacultad('');
+                setInstrumento('');
+                setCategoriaEvento('');
+                setCrossMomento('');
+                setCrossEstado('');
+              }}
+              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+              Limpiar
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Cross-Filter Banner */}
+      <CrossFilterBanner
+        items={crossFilterItems}
+        onClearAll={() => {
+          setCrossMomento('');
+          setCrossEstado('');
+        }}
+      />
+
       {error && (
-        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+        <div className="rounded-2xl bg-rose-50 border border-rose-200 p-4 text-sm text-rose-800">
           {error}
         </div>
       )}
 
-      {/* Top KPI Cards */}
+      {/* KPIs */}
       {loading && !data ? (
         <KpiGridSkeleton count={4} />
-      ) : rt ? (
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      ) : (
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard
-            code="KPI-04"
-            title="Tasa de cumplimiento (Elegibles)"
-            value={rt.tasa_cumplimiento != null ? `${Number(rt.tasa_cumplimiento).toFixed(1)}` : '—'}
-            unit={rt.tasa_cumplimiento != null ? '%' : undefined}
-            semaforo={rt.semaforo || 'SIN_DATOS'}
-            metaLabel="Meta: ≥ 90%"
-            subtitle={`n = ${rt.elegibles?.toLocaleString() ?? 0} elegibles`}
-            progressPct={rt.tasa_cumplimiento ?? null}
+            code="KPI-04 · CUMPLIMIENTO"
+            title={crossMomento ? `Cumplimiento (${crossMomento})` : 'Tasa de Cumplimiento'}
+            value={
+              effectiveKpi?.suprimido
+                ? 'SUPRIMIDO'
+                : effectiveKpi?.tasa_cumplimiento != null
+                  ? `${Number(effectiveKpi.tasa_cumplimiento).toFixed(1)}%`
+                  : '—'
+            }
+            subtitle={`${effectiveKpi?.elegibles_completadas ?? 0} de ${effectiveKpi?.elegibles ?? 0} elegibles`}
+            metaLabel="Meta ≥ 90.0%"
+            semaforo={effectiveKpi?.semaforo || 'SIN_DATOS'}
             accent="indigo"
             Icon={ClipboardCheck}
           />
           <KpiCard
             code="EN VENTANA"
-            title="Completadas dentro de plazo"
-            value={(rt.completadas_en_ventana ?? 0).toLocaleString()}
-            subtitle={`${rt.en_par_valido?.toLocaleString() ?? 0} habilitan par válido`}
+            title="Completadas en Ventana"
+            value={String(effectiveKpi?.completadas_en_ventana ?? 0)}
+            subtitle={`Tardías: ${effectiveKpi?.completadas_tardias ?? 0}`}
             accent="emerald"
             Icon={CheckCircle2}
           />
           <KpiCard
-            code="TARDÍAS"
-            title="Completadas fuera de ventana"
-            value={(rt.completadas_tardias ?? 0).toLocaleString()}
-            subtitle="Cuentan en KPI-04; excluidas de pares"
-            accent="amber"
-            Icon={AlertTriangle}
-          />
-          <KpiCard
-            code="PENDIENTES / VENCIDAS"
-            title="Oportunidades sin completar"
-            value={((rt.vencidas ?? 0) + (rt.pendientes_en_ventana ?? 0)).toLocaleString()}
-            subtitle={`${rt.vencidas ?? 0} vencidas · ${rt.pendientes_en_ventana ?? 0} pendientes`}
-            accent="rose"
+            code="PENDIENTES"
+            title="Pendientes en Ventana"
+            value={String(effectiveKpi?.pendientes_en_ventana ?? 0)}
+            subtitle="Aún dentro de plazo operativo"
+            accent="teal"
             Icon={Clock}
           />
+          <KpiCard
+            code="VENCIDAS"
+            title="Oportunidades Vencidas"
+            value={String(effectiveKpi?.vencidas ?? 0)}
+            subtitle="Requieren gestión o reprogramación"
+            accent="rose"
+            Icon={XCircle}
+          />
         </section>
-      ) : null}
+      )}
 
-      {/* 2 Interactive ECharts */}
+      {/* Visuals: Barras Apiladas por Momento (INICIAL vs FINAL) + Gauge KPI-04 */}
       {loading && !data ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <div className="lg:col-span-7"><ChartSkeleton height={270} /></div>
-          <div className="lg:col-span-5"><ChartSkeleton height={270} /></div>
-        </div>
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          <div className="lg:col-span-7">
+            <ChartSkeleton height={320} />
+          </div>
+          <div className="lg:col-span-5">
+            <ChartSkeleton height={320} />
+          </div>
+        </section>
       ) : (
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <div className="lg:col-span-7 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Cumplimiento Operativo vs. Meta (90%)
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Comparativo de cumplimiento total, en ventana y proporción vencida al corte
-              </p>
-            </div>
-            {chartTasaOption ? (
-              <EChartBox
-                option={chartTasaOption}
-                height={265}
-                ariaLabel="Gráfico de barras de cumplimiento operativo contra meta de 90%"
-              />
-            ) : (
-              <EmptyState title="Sin métricas de cumplimiento" icon="inbox" />
-            )}
-          </div>
+          <ChartCard
+            className="lg:col-span-7"
+            title="Cumplimiento por Momento (INICIAL vs. FINAL)"
+            subtitle="Barras apiladas por estado para detectar exactamente en qué momento se concentran atrasos o vencimientos."
+            contextBadge={`${oportunidadesRaw.length} oportunidades`}
+            option={chartMomentoStackedOption}
+            height={320}
+            ariaLabel="Barras apiladas de cumplimiento por momento INICIAL y FINAL"
+            exportFilename={`RO02_momento_apilado_${corte}.png`}
+            interactiveHint
+            onItemClick={(params) => {
+              const momentoClicked = params.name === 'INICIAL' || params.name === 'FINAL' ? params.name : '';
+              const mapEstado: Record<string, string> = {
+                'En ventana': 'COMPLETADA_EN_VENTANA',
+                Tardía: 'COMPLETADA_TARDIA',
+                Pendiente: 'PENDIENTE_EN_VENTANA',
+                Vencida: 'VENCIDA',
+              };
+              const estadoClicked = params.seriesName ? mapEstado[params.seriesName] || '' : '';
 
-          <div className="lg:col-span-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Distribución por Estado de Evaluación
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Oportunidades elegibles clasificadas al corte {formatFechaEs(corte)}
-              </p>
-            </div>
-            {chartEstadosOption ? (
-              <EChartBox
-                option={chartEstadosOption}
-                height={265}
-                ariaLabel="Gráfico circular de estados de evaluación"
-              />
-            ) : (
-              <EmptyState title="Sin oportunidades registradas" icon="inbox" />
-            )}
-          </div>
+              if (
+                crossMomento === momentoClicked &&
+                crossEstado === estadoClicked
+              ) {
+                setCrossMomento('');
+                setCrossEstado('');
+              } else {
+                setCrossMomento(momentoClicked);
+                setCrossEstado(estadoClicked);
+              }
+            }}
+          />
+
+          <ChartCard
+            className="lg:col-span-5"
+            title="Velocímetro KPI-04 vs. Meta (90%)"
+            subtitle="Porcentaje de oportunidades elegibles completadas a la fecha de corte."
+            contextBadge={crossMomento ? `Momento: ${crossMomento}` : 'Global'}
+            option={chartGaugeKpi04Option}
+            height={320}
+            ariaLabel="Velocímetro de cumplimiento KPI-04"
+            exportFilename={`RO02_gauge_kpi04_${corte}.png`}
+          />
         </section>
       )}
 
-      {/* Detailed Paginated Table */}
+      <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-slate-100/80 border border-slate-200/80 text-xs text-slate-600">
+        <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
+        <p>
+          <strong>Trazabilidad psicométrica:</strong> Solo las parejas con evaluación INICIAL y FINAL completadas en ventana (y mismo evento índice en PCL-5) conforman un <strong>Par válido</strong> para los reportes gerenciales RG-01 y RG-02.
+        </p>
+      </div>
+
+      {/* PowerDataTable */}
       {loading && !data ? (
-        <TableSkeleton rows={6} cols={9} />
+        <TableSkeleton rows={6} />
       ) : (
-        <section className="space-y-3">
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-card overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <span className="w-1.5 h-5 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
-                <h3 id={captionId} className="font-display text-sm font-bold text-slate-900 tracking-tight">
-                  Matriz de control operacional por oportunidad de evaluación
-                </h3>
-              </div>
-              {pag && (
-                <span className="text-xs font-medium text-slate-500 tabular-nums">
-                  Mostrando <strong className="text-slate-800">{data?.oportunidades?.length || 0}</strong> de{' '}
-                  <strong className="text-slate-800">{pag.totalRegistros.toLocaleString()}</strong> oportunidades
-                </span>
-              )}
-            </div>
-
-            {!data?.oportunidades?.length ? (
-              <EmptyState
-                title="No se encontraron oportunidades"
-                description="Ajusta el filtro de instrumento, estado o código de estudiante."
-                actionLabel={activeFilterCount > 0 ? 'Limpiar filtros' : undefined}
-                onAction={activeFilterCount > 0 ? limpiarFiltros : undefined}
-                icon="filter"
-              />
-            ) : (
-              <div
-                tabIndex={0}
-                role="region"
-                aria-labelledby={captionId}
-                className="table-wrapper table-wrapper--paged !border-0 !rounded-none"
-              >
-                <table className="mwg-table">
-                  <caption className="sr-only">
-                    Control de evaluaciones psicológicas pendientes y completadas al corte {formatFechaEs(corte)}
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Instrumento</th>
-                      <th scope="col">Estudiante</th>
-                      <th scope="col">Programa</th>
-                      <th scope="col">Momento</th>
-                      <th scope="col">Ventana prevista</th>
-                      <th scope="col">Realización</th>
-                      <th scope="col">Puntaje / Ver.</th>
-                      <th scope="col">Estado</th>
-                      <th scope="col">Par válido</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.oportunidades.map((r: any) => (
-                      <tr key={r.id_oportunidad}>
-                        <th scope="row">
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-md text-xs font-bold border ${
-                              r.codigo_instrumento === 'PSS-10'
-                                ? 'bg-teal-50 text-teal-800 border-teal-200'
-                                : 'bg-sky-50 text-sky-800 border-sky-200'
-                            }`}
-                          >
-                            {r.codigo_instrumento}
-                          </span>
-                          <div className="text-[11px] font-normal text-slate-400 mt-0.5">
-                            {r.codigo_evento_local
-                              ? `${r.codigo_evento_local}${r.categoria_evento ? ` · ${r.categoria_evento}` : ''}`
-                              : 'No aplica'}
-                          </div>
-                        </th>
-                        <td data-label="Estudiante">
-                          <div className="font-bold text-slate-900">{r.codigo_anonimizado}</div>
-                          <div className="text-[11px] text-slate-500 truncate max-w-[160px]" title={r.facultad_o_area}>
-                            {r.facultad_o_area}
-                          </div>
-                        </td>
-                        <td data-label="Programa" title={r.codigo_programa}>
-                          <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200/80">
-                            {compactPrograma(r.codigo_programa)}
-                          </span>
-                        </td>
-                        <td data-label="Momento" className="text-xs font-bold text-slate-700">
-                          {r.momento}
-                        </td>
-                        <td data-label="Ventana prevista" className="tabular-nums text-xs text-slate-600 whitespace-nowrap">
-                          {formatFechaEs(r.fecha_ventana_inicio)} – {formatFechaEs(r.fecha_ventana_fin)}
-                        </td>
-                        <td data-label="Realización" className="tabular-nums text-xs text-slate-700">
-                          {formatFechaEs(r.fecha_realizacion)}
-                        </td>
-                        <td data-label="Puntaje / Ver." className="tabular-nums text-slate-700">
-                          {r.puntaje_total != null ? (
-                            <div>
-                              <span className="font-bold text-slate-900">{r.puntaje_total} pts</span>
-                              <span className="text-[11px] text-slate-400 ml-1">v{r.numero_version ?? 1}</span>
-                            </div>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td data-label="Estado">
-                          <EstadoEvaluacionBadge estado={r.estado_evaluacion} />
-                        </td>
-                        <td data-label="Par válido">
-                          <span
-                            className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                              r.par_valido
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                : 'bg-slate-100 text-slate-600 border-slate-200'
-                            }`}
-                          >
-                            {r.par_valido ? 'Sí' : 'No'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {pag && pag.totalPaginas > 1 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3 rounded-2xl border border-slate-200/80 shadow-card">
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <span>Filas por página:</span>
-                <select
-                  aria-label="Filas por página"
-                  value={pageSize}
-                  onChange={(e) => {
-                    setPageSize(Number(e.target.value));
-                    setPage(1);
-                  }}
-                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs bg-white font-semibold"
-                >
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                  Anterior
-                </button>
-                <span className="text-xs font-semibold text-slate-700 px-2 tabular-nums">
-                  {pag.page} / {pag.totalPaginas}
-                </span>
-                <button
-                  type="button"
-                  disabled={page >= pag.totalPaginas}
-                  onClick={() => setPage((p) => Math.min(pag.totalPaginas, p + 1))}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40"
-                >
-                  Siguiente
-                  <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
+        <PowerDataTable
+          title="Registro Detallado de Oportunidades de Evaluación"
+          subtitle="Ordena por puntaje, fecha o estado, busca por estudiante y exporta la selección actual a Excel (CSV UTF-8)."
+          caption="Tabla operativa de control de evaluaciones PSS-10 y PCL-5"
+          data={oportunidadesFiltradas}
+          columns={columns}
+          initialSorting={[{ id: 'estado_evaluacion', desc: true }]}
+          searchPlaceholder="Buscar código, facultad o programa..."
+          csvFilename={`RO02_cumplimiento_${corte}.csv`}
+          csvColumns={[
+            { header: 'Código Anonimizado', accessor: (r) => r.codigo_anonimizado },
+            { header: 'Facultad / Área', accessor: (r) => r.facultad_o_area },
+            { header: 'Programa', accessor: (r) => r.codigo_programa },
+            { header: 'Instrumento', accessor: (r) => r.codigo_instrumento },
+            { header: 'Momento', accessor: (r) => r.momento },
+            { header: 'Fecha Prevista', accessor: (r) => r.fecha_prevista || '' },
+            { header: 'Fecha Realización', accessor: (r) => r.fecha_realizacion || '' },
+            { header: 'Puntaje Total', accessor: (r) => r.puntaje_total ?? '' },
+            { header: 'Par Válido', accessor: (r) => (r.par_valido ? 'SI' : 'NO') },
+            { header: 'Estado Evaluación', accessor: (r) => r.estado_evaluacion },
+          ]}
+        />
       )}
-
-      <details className="rounded-2xl border border-slate-200/80 bg-white px-5 py-3 text-xs text-slate-600 shadow-card">
-        <summary className="cursor-pointer font-semibold text-slate-700 inline-flex items-center gap-2 select-none">
-          <Info className="w-4 h-4 text-teal-600" aria-hidden="true" />
-          Reglas de elegibilidad y cumplimiento D01 (RO-02 / KPI-04)
-        </summary>
-        <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4 leading-relaxed">
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Elegibilidad al corte (D01)</strong>
-            Una oportunidad es elegible cuando <code>fecha_ventana_fin &lt;= @corte</code> (excluyendo futuras y no aplicables).
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Tardías vs. Pares válidos</strong>
-            Las evaluaciones tardías suman al cumplimiento (<code>KPI-04</code>), pero nunca conforman pares válidos en <code>RG-01</code>/<code>RG-02</code>.
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Versionado auditado</strong>
-            Cada corrección genera una nueva versión (<code>v2+</code>) manteniendo trazabilidad completa.
-          </div>
-        </div>
-      </details>
     </div>
   );
 }

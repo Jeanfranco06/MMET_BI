@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { api, type FiltrosResponse, type ResumenResponse, type ImpactoPracticasResponse, type ImpactoPracticaRow } from '@/lib/api';
 import { KpiCard } from './KpiCard';
-import { EChartBox } from './EChartBox';
+import { ChartCard } from './ChartCard';
 import { ChartSkeleton, KpiGridSkeleton } from './UiStates';
 import {
   CHART_COLORS,
@@ -374,61 +374,49 @@ export function ResumenEjecutivoView({
           </>
         ) : (
           <>
-            <div className="lg:col-span-7 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <h3 className="font-display text-sm font-bold text-slate-900">
-                    Reducción promedio PSS-10 por Práctica Principal
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Comparativo contra meta operativa de 4.0 puntos (solo prácticas con n ≥ 5 pares válidos)
-                  </p>
-                </div>
+            <ChartCard
+              className="lg:col-span-7"
+              title="Reducción promedio PSS-10 por Práctica Principal"
+              subtitle="Comparativo contra meta operativa de 4.0 puntos (solo prácticas con n ≥ 5 pares válidos). Clic para abrir RG-02."
+              contextBadge="PSS-10 · Meta ≥ 4.0 pts"
+              option={chartPracticasPss}
+              height={270}
+              ariaLabel="Gráfico de barras de reducción promedio PSS-10 por práctica principal"
+              exportFilename={`resumen_practicas_pss10_${corte}.png`}
+              interactiveHint
+              onItemClick={() => onNavigate('practicas')}
+              extraHeader={
                 <button
                   type="button"
                   onClick={() => onNavigate('practicas')}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900 shrink-0"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900 mr-1"
                 >
-                  Ver RG-02 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                  RG-02 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
-              </div>
-              <EChartBox
-                option={chartPracticasPss}
-                height={270}
-                ariaLabel="Gráfico de barras de reducción promedio PSS-10 por práctica principal"
-              />
-            </div>
+              }
+            />
 
-            <div className="lg:col-span-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <h3 className="font-display text-sm font-bold text-slate-900">
-                    Distribución de Continuidad Estudiantil
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Clasificación operativa al corte {corte} (RO-01 · KPI-03)
-                  </p>
-                </div>
+            <ChartCard
+              className="lg:col-span-5"
+              title="Distribución de Continuidad Estudiantil"
+              subtitle={`Clasificación operativa al corte ${corte} (RO-01 · KPI-03). Clic para explorar casos.`}
+              contextBadge={`${resumen?.kpi03_continuidad.evaluables ?? 0} evaluables`}
+              option={chartContinuidadDonut}
+              height={270}
+              ariaLabel="Gráfico circular de distribución de estados de continuidad"
+              exportFilename={`resumen_continuidad_${corte}.png`}
+              interactiveHint
+              onItemClick={() => onNavigate('continuidad')}
+              extraHeader={
                 <button
                   type="button"
                   onClick={() => onNavigate('continuidad')}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900 shrink-0"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900 mr-1"
                 >
-                  Ver RO-01 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                  RO-01 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
-              </div>
-              {chartContinuidadDonut ? (
-                <EChartBox
-                  option={chartContinuidadDonut}
-                  height={270}
-                  ariaLabel="Gráfico circular de distribución de estados de continuidad"
-                />
-              ) : (
-                <div className="h-[270px] flex items-center justify-center text-xs text-slate-500">
-                  Sin suficientes datos evaluables para mostrar distribución.
-                </div>
-              )}
-            </div>
+              }
+            />
           </>
         )}
       </section>

@@ -295,6 +295,20 @@ dialog::backdrop {
   overscroll-behavior: contain;
 }
 
+/* Focus Mode fullscreen chart dialog */
+dialog.mwg-focus-modal:modal {
+  margin: auto;
+  width: min(80rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overscroll-behavior: contain;
+}
+
+/* Sortable header button fills cell cleanly */
+.mwg-table thead th:has(> button) {
+  padding: 0;
+}
+
 /* Slide-over right drawer (AI Assistant) */
 dialog.mwg-slideover:modal {
   margin: 0 0 0 auto;

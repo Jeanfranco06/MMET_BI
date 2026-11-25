@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ColumnDef } from '@tanstack/react-table';
 import {
-  ArrowUpDown,
   Award,
   Calendar,
   CheckCircle2,
@@ -14,16 +14,23 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { api, type FiltrosResponse, type ImpactoPracticasResponse, type ImpactoPracticaRow } from '@/lib/api';
+import {
+  api,
+  type FiltrosResponse,
+  type ImpactoPracticaRow,
+  type ImpactoPracticasResponse,
+} from '@/lib/api';
 import { AiReportButton } from './AiReportButton';
 import { KpiCard } from './KpiCard';
-import { EChartBox } from './EChartBox';
-import { ChartSkeleton, EmptyState, KpiGridSkeleton, SuppressedState, TableSkeleton } from './UiStates';
+import { ChartCard } from './ChartCard';
+import { SemaforoBadge } from './SemaforoBadge';
+import { DataBarCell, PowerDataTable } from './PowerDataTable';
+import { CrossFilterBanner, PowerBiHintBadge, SlicerPills } from './PowerBiControls';
+import { ChartSkeleton, KpiGridSkeleton, TableSkeleton } from './UiStates';
 import {
   EXECUTIVE_AXIS_LABEL,
   EXECUTIVE_SPLIT_LINE,
   barGradient,
-  metaMarkLine,
 } from '@/lib/chartTheme';
 
 interface EfectividadPracticaReportProps {
@@ -49,24 +56,20 @@ function compactPrograma(codigo?: string): string {
 function CumpleMetaBadge({ cumple, suprimido }: { cumple: boolean | null; suprimido: boolean }) {
   if (suprimido || cumple === null) {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" aria-hidden="true" />
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-500 border border-slate-200">
         No evaluable (n &lt; 5)
       </span>
     );
   }
-  if (cumple) {
-    return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-        Cumple meta
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+  return cumple ? (
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+      Cumple meta
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
       <XCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-      No cumple
+      Bajo meta
     </span>
   );
 }
@@ -76,18 +79,22 @@ export function EfectividadPracticaReport({
   corteInicial,
   semestre,
 }: EfectividadPracticaReportProps) {
-  const [instrumento, setInstrumento] = useState<'PSS-10' | 'PCL-5'>('PSS-10');
   const [corte, setCorte] = useState(corteInicial);
+  const [instrumento, setInstrumento] = useState<'PSS-10' | 'PCL-5'>('PSS-10');
   const [facultad, setFacultad] = useState('');
   const [vista, setVista] = useState<'practica' | 'programa'>('practica');
-  const [filtersOpen, setFiltersOpen] = useState(true);
-  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // Cross-filtering local instantáneo
+  const [crossKey, setCrossKey] = useState<string | null>(null);
 
   const [data, setData] = useState<ImpactoPracticasResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const captionId = useId();
+  useEffect(() => {
+    setCrossKey(null);
+  }, [instrumento, vista, facultad, semestre, corte]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -111,42 +118,47 @@ export function EfectividadPracticaReport({
     cargar();
   }, [cargar]);
 
-  const limpiarFiltros = () => {
-    setInstrumento('PSS-10');
-    setFacultad('');
-    setVista('practica');
-  };
+  const rowKey = useCallback(
+    (r: ImpactoPracticaRow) => (vista === 'practica' ? r.codigo_practica : r.codigo_programa || r.codigo_practica),
+    [vista],
+  );
 
-  const activeFilterCount = [
-    facultad,
-    instrumento !== 'PSS-10' ? instrumento : '',
-    vista !== 'practica' ? vista : '',
-  ].filter(Boolean).length;
+  const filasRaw: ImpactoPracticaRow[] = useMemo(
+    () => (vista === 'practica' ? data?.por_practica || [] : data?.por_programa || []),
+    [data, vista],
+  );
+
+  const filasCrossFiltradas = useMemo(() => {
+    if (!crossKey) return filasRaw;
+    return filasRaw.filter((r) => rowKey(r) === crossKey);
+  }, [filasRaw, crossKey, rowKey]);
 
   const kpi05 = data?.kpi05_meta_practicas;
   const metaPts = data?.meta_operativa_pts ?? (instrumento === 'PSS-10' ? 4 : 10);
 
-  const filasRaw: ImpactoPracticaRow[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
-  const filas = useMemo(() => {
-    return [...filasRaw].sort((a, b) => {
-      const av = a.suprimido ? -9999 : Number(a.reduccion_promedio ?? -999);
-      const bv = b.suprimido ? -9999 : Number(b.reduccion_promedio ?? -999);
-      return sortDir === 'desc' ? bv - av : av - bv;
-    });
-  }, [filasRaw, sortDir]);
-
-  const totalParesFilas = filas.reduce((acc, r) => acc + Number(r.pares_validos || 0), 0);
-  const evaluablesFilas = filas.filter(
-    (r): r is ImpactoPracticaRow & { reduccion_promedio: number } =>
-      !r.suprimido && r.reduccion_promedio != null,
+  const evaluablesFilas = useMemo(
+    () =>
+      filasRaw
+        .filter(
+          (r): r is ImpactoPracticaRow & { reduccion_promedio: number } =>
+            !r.suprimido && r.reduccion_promedio != null,
+        )
+        .sort((a, b) => Number(b.reduccion_promedio) - Number(a.reduccion_promedio)),
+    [filasRaw],
   );
-  const mejorPractica = evaluablesFilas.length
-    ? [...evaluablesFilas].sort((a, b) => Number(b.reduccion_promedio) - Number(a.reduccion_promedio))[0]
-    : null;
 
-  // Chart 1: Reduction vs Operational Target (markLine)
-  const chartRankingOption = useMemo(() => {
-    const items = evaluablesFilas.slice(0, 10);
+  const selectedRow = useMemo(
+    () => (crossKey ? filasRaw.find((r) => rowKey(r) === crossKey) || null : null),
+    [crossKey, filasRaw, rowKey],
+  );
+
+  const mejorPractica = selectedRow && !selectedRow.suprimido ? selectedRow : evaluablesFilas[0] || null;
+
+  // Visual 1: Barras Horizontales con markLine vertical de Meta Operativa
+  const chartHorizontalOption = useMemo(() => {
+    const items = evaluablesFilas.slice(0, 12);
+    if (items.length === 0) return null;
+
     return {
       tooltip: {
         trigger: 'axis',
@@ -154,522 +166,666 @@ export function EfectividadPracticaReport({
         formatter: (params: any[]) => {
           const p = params[0];
           const r = items[p.dataIndex];
-          const label = vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa;
+          if (!r) return '';
+          const label =
+            vista === 'practica'
+              ? `${r.codigo_practica} · ${r.nombre_practica}`
+              : `${r.codigo_programa} (${r.codigo_practica})`;
           return `<div style="font-weight:700;margin-bottom:4px">${label}</div>
-            <div>Reducción ${instrumento}: <strong style="color:#5EEAD4">${r.reduccion_promedio > 0 ? '+' : ''}${Number(r.reduccion_promedio).toFixed(2)} pts</strong></div>
-            <div style="color:#94A3B8;font-size:11px">n = ${r.pares_validos} pares · Meta: ≥ ${metaPts.toFixed(1)} pts</div>`;
+            <div>Reducción ${instrumento}: <strong style="color:#5EEAD4">${r.reduccion_promedio > 0 ? '+' : ''}${r.reduccion_promedio.toFixed(2)} pts</strong></div>
+            <div>Inicial → Final: <strong>${Number(r.promedio_inicial ?? 0).toFixed(1)} → ${Number(r.promedio_final ?? 0).toFixed(1)}</strong></div>
+            <div style="color:#94A3B8;font-size:11px;margin-top:3px">n = ${r.pares_validos} pares · Meta ≥ ${metaPts.toFixed(1)} pts · Clic para filtrar</div>`;
         },
       },
-      grid: { left: 16, right: 20, top: 28, bottom: 26, containLabel: true },
+      grid: { left: 16, right: 38, top: 28, bottom: 26, containLabel: true },
       xAxis: {
-        type: 'category',
-        data: items.map((r) => (vista === 'practica' ? r.codigo_practica : compactPrograma(r.codigo_programa))),
-        axisLine: { lineStyle: { color: '#E2E8F0' } },
-        axisTick: { show: false },
-        axisLabel: EXECUTIVE_AXIS_LABEL,
-      },
-      yAxis: {
         type: 'value',
-        name: 'Reducción (pts)',
+        name: `Reducción ${instrumento} (pts)`,
+        nameLocation: 'middle',
+        nameGap: 22,
         nameTextStyle: { color: '#64748B', fontSize: 11 },
         axisLabel: EXECUTIVE_AXIS_LABEL,
         splitLine: EXECUTIVE_SPLIT_LINE,
+      },
+      yAxis: {
+        type: 'category',
+        inverse: true,
+        data: items.map((r) =>
+          vista === 'practica'
+            ? `${r.codigo_practica} · ${r.nombre_practica.slice(0, 18)}`
+            : compactPrograma(r.codigo_programa),
+        ),
+        axisLine: { lineStyle: { color: '#E2E8F0' } },
+        axisTick: { show: false },
+        axisLabel: EXECUTIVE_AXIS_LABEL,
       },
       series: [
         {
           name: `Reducción ${instrumento}`,
           type: 'bar',
-          barMaxWidth: 42,
-          data: items.map((r) => ({
-            value: Number(r.reduccion_promedio.toFixed(2)),
-            itemStyle: {
-              borderRadius: [8, 8, 0, 0],
-              color: r.cumple_meta
-                ? barGradient('#14B8A6', '#0D9488')
-                : barGradient('#F59E0B', '#D97706'),
+          barMaxWidth: 28,
+          label: {
+            show: true,
+            position: 'right',
+            fontSize: 11,
+            fontWeight: 700,
+            color: '#334155',
+            formatter: (p: any) => `+${Number(p.value).toFixed(1)}`,
+          },
+          data: items.map((r) => {
+            const key = rowKey(r);
+            const isSelected = !crossKey || crossKey === key;
+            const color =
+              r.reduccion_promedio >= metaPts
+                ? barGradient('#10B981', '#059669')
+                : r.reduccion_promedio > 0
+                  ? barGradient('#F59E0B', '#D97706')
+                  : barGradient('#F43F5E', '#E11D48');
+            return {
+              name: key,
+              value: Number(r.reduccion_promedio.toFixed(2)),
+              itemStyle: {
+                borderRadius: [0, 8, 8, 0],
+                color,
+                opacity: isSelected ? 1 : 0.25,
+              },
+            };
+          }),
+          markLine: {
+            symbol: ['none', 'none'],
+            silent: true,
+            lineStyle: { color: '#0F766E', type: 'dashed', width: 2 },
+            label: {
+              formatter: `Meta ≥ ${metaPts.toFixed(1)} pts`,
+              position: 'insideEndTop',
+              color: '#0F766E',
+              fontSize: 11,
+              fontWeight: 700,
+              backgroundColor: 'rgba(240,253,250,0.95)',
+              padding: [3, 6],
+              borderRadius: 6,
             },
-          })),
-          markLine: metaMarkLine(metaPts, `Meta ≥ ${metaPts.toFixed(1)} pts`, '#0D9488'),
+            data: [{ xAxis: metaPts }],
+          },
         },
       ],
     };
-  }, [evaluablesFilas, instrumento, metaPts, vista]);
+  }, [evaluablesFilas, instrumento, metaPts, vista, crossKey, rowKey]);
 
-  // Chart 2: Pre vs Post Score Comparison
-  const chartPrePostOption = useMemo(() => {
-    const items = evaluablesFilas.slice(0, 8);
+  // Visual 2A: Velocímetro (Gauge) de KPI-05 (% prácticas que cumplen meta ≥ 80%)
+  const chartGaugeKpi05Option = useMemo(() => {
+    if (!kpi05) return null;
+    const tasa = kpi05.tasa_cumplimiento_meta ?? 0;
     return {
       tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
+        formatter: () =>
+          `<strong>KPI-05 (${instrumento})</strong><br/>Cumplen meta: <strong>${kpi05.practicas_cumplen_meta} de ${kpi05.practicas_evaluables}</strong> (${kpi05.tasa_cumplimiento_meta != null ? `${kpi05.tasa_cumplimiento_meta.toFixed(1)}%` : 'Sin datos'})<br/>Meta operativa: ≥ 80.0%`,
       },
-      legend: {
-        top: 0,
-        right: 0,
-        icon: 'roundRect',
-        itemWidth: 10,
-        itemHeight: 10,
-        textStyle: { color: '#475569', fontSize: 11 },
+      series: [
+        {
+          type: 'gauge',
+          startAngle: 205,
+          endAngle: -25,
+          min: 0,
+          max: 100,
+          splitNumber: 5,
+          radius: '92%',
+          center: ['50%', '62%'],
+          axisLine: {
+            lineStyle: {
+              width: 16,
+              color: [
+                [0.5, '#F43F5E'],
+                [0.8, '#F59E0B'],
+                [1, '#10B981'],
+              ],
+            },
+          },
+          pointer: {
+            icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z',
+            length: '52%',
+            width: 8,
+            offsetCenter: [0, '-18%'],
+            itemStyle: { color: '#0F172A' },
+          },
+          axisTick: { distance: -16, length: 5, lineStyle: { color: '#fff', width: 1 } },
+          splitLine: { distance: -16, length: 16, lineStyle: { color: '#fff', width: 2 } },
+          axisLabel: { color: '#64748B', distance: 22, fontSize: 10, formatter: '{value}%' },
+          title: { offsetCenter: [0, '24%'], fontSize: 11, color: '#64748B', fontWeight: 600 },
+          detail: {
+            valueAnimation: true,
+            formatter: () =>
+              kpi05.tasa_cumplimiento_meta != null
+                ? `${kpi05.tasa_cumplimiento_meta.toFixed(1)}%`
+                : 'N/A',
+            color: '#0F172A',
+            fontSize: 24,
+            fontWeight: 800,
+            offsetCenter: [0, '2%'],
+          },
+          data: [{ value: Number(tasa.toFixed(1)), name: 'Meta ≥ 80% prácticas' }],
+        },
+      ],
+    };
+  }, [kpi05, instrumento]);
+
+  // Visual 2B: Dispersión (Scatter) Pares Válidos (X) vs. Reducción en pts (Y)
+  const chartScatterOption = useMemo(() => {
+    if (evaluablesFilas.length === 0) return null;
+    const maxN = Math.max(15, ...evaluablesFilas.map((r) => r.pares_validos));
+
+    return {
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: any) => {
+          const r = evaluablesFilas[params.dataIndex];
+          if (!r) return '';
+          const title = vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa;
+          return `<div style="font-weight:700;margin-bottom:4px">${title}</div>
+            <div>Pares válidos: <strong>n = ${r.pares_validos}</strong></div>
+            <div>Reducción ${instrumento}: <strong style="color:#5EEAD4">+${r.reduccion_promedio.toFixed(2)} pts</strong></div>
+            <div>Meta operativa: <strong>${r.cumple_meta ? 'Cumple' : 'Bajo meta'} (≥ ${metaPts.toFixed(1)} pts)</strong></div>
+            <div style="color:#94A3B8;font-size:11px;margin-top:3px">Clic para filtrar la matriz</div>`;
+        },
       },
-      grid: { left: 14, right: 16, top: 34, bottom: 24, containLabel: true },
+      grid: { left: 18, right: 26, top: 28, bottom: 32, containLabel: true },
       xAxis: {
-        type: 'category',
-        data: items.map((r) => (vista === 'practica' ? r.codigo_practica : compactPrograma(r.codigo_programa))),
-        axisLine: { lineStyle: { color: '#E2E8F0' } },
-        axisTick: { show: false },
+        type: 'value',
+        name: 'Evidencia (Pares válidos n)',
+        nameLocation: 'middle',
+        nameGap: 22,
+        min: 0,
+        max: Math.ceil(maxN * 1.15),
+        nameTextStyle: { color: '#64748B', fontSize: 11 },
         axisLabel: EXECUTIVE_AXIS_LABEL,
+        splitLine: EXECUTIVE_SPLIT_LINE,
       },
       yAxis: {
         type: 'value',
-        name: `Puntaje ${instrumento}`,
+        name: `Reducción ${instrumento} (pts)`,
         nameTextStyle: { color: '#64748B', fontSize: 11 },
         axisLabel: EXECUTIVE_AXIS_LABEL,
         splitLine: EXECUTIVE_SPLIT_LINE,
       },
       series: [
         {
-          name: 'Prom. Inicial',
-          type: 'bar',
-          barMaxWidth: 26,
-          itemStyle: { borderRadius: [6, 6, 0, 0], color: barGradient('#94A3B8', '#64748B') },
-          data: items.map((r) => Number((r.promedio_inicial ?? 0).toFixed(2))),
-        },
-        {
-          name: 'Prom. Final',
-          type: 'bar',
-          barMaxWidth: 26,
-          itemStyle: {
-            borderRadius: [6, 6, 0, 0],
-            color:
-              instrumento === 'PSS-10'
-                ? barGradient('#14B8A6', '#0D9488')
-                : barGradient('#38BDF8', '#0284C7'),
+          name: 'Evidencia vs Reducción',
+          type: 'scatter',
+          symbolSize: (val: number[]) => Math.max(16, Math.min(44, 10 + (val[0] || 0) * 1.4)),
+          label: {
+            show: true,
+            position: 'top',
+            fontSize: 10,
+            fontWeight: 700,
+            color: '#334155',
+            formatter: (p: any) => {
+              const r = evaluablesFilas[p.dataIndex];
+              return r ? (vista === 'practica' ? r.codigo_practica : compactPrograma(r.codigo_programa)) : '';
+            },
           },
-          data: items.map((r) => Number((r.promedio_final ?? 0).toFixed(2))),
+          data: evaluablesFilas.map((r) => {
+            const key = rowKey(r);
+            const isSelected = !crossKey || crossKey === key;
+            return {
+              name: key,
+              value: [r.pares_validos, Number(r.reduccion_promedio.toFixed(2))],
+              itemStyle: {
+                color: r.cumple_meta ? '#10B981' : '#F59E0B',
+                borderColor: isSelected ? '#0F172A' : '#ffffff',
+                borderWidth: crossKey === key ? 3 : 1.5,
+                opacity: isSelected ? 0.9 : 0.22,
+              },
+            };
+          }),
+          markLine: {
+            symbol: ['none', 'none'],
+            silent: true,
+            data: [
+              {
+                yAxis: metaPts,
+                lineStyle: { color: '#0F766E', type: 'dashed', width: 1.5 },
+                label: { formatter: `Meta ≥ ${metaPts.toFixed(1)} pts`, color: '#0F766E', fontSize: 10 },
+              },
+              {
+                xAxis: 5,
+                lineStyle: { color: '#94A3B8', type: 'dotted', width: 1.5 },
+                label: { formatter: 'n = 5', color: '#64748B', fontSize: 10 },
+              },
+            ],
+          },
         },
       ],
     };
-  }, [evaluablesFilas, instrumento, vista]);
+  }, [evaluablesFilas, instrumento, metaPts, vista, crossKey, rowKey]);
+
+  const maxPares = useMemo(
+    () => Math.max(10, ...filasCrossFiltradas.map((r) => Number(r.pares_validos || 0))),
+    [filasCrossFiltradas],
+  );
+
+  const columns = useMemo<ColumnDef<ImpactoPracticaRow, any>[]>(
+    () => [
+      {
+        id: 'entidad',
+        accessorFn: (r) => (vista === 'practica' ? `${r.codigo_practica} ${r.nombre_practica}` : r.codigo_programa || ''),
+        header: vista === 'practica' ? 'Práctica principal' : 'Programa / Cohorte',
+        cell: ({ row }) =>
+          vista === 'practica' ? (
+            <div>
+              <div className="font-bold text-slate-900">{row.original.codigo_practica}</div>
+              <div className="text-[11px] text-slate-500">{row.original.nombre_practica}</div>
+            </div>
+          ) : (
+            <div>
+              <div className="font-bold text-slate-900">{compactPrograma(row.original.codigo_programa)}</div>
+              <div className="text-[11px] text-slate-500">
+                {row.original.codigo_practica} · {row.original.nombre_practica}
+              </div>
+            </div>
+          ),
+      },
+      {
+        id: 'tipo',
+        accessorFn: (r) => (vista === 'practica' ? r.tipo_practica || (r.es_mixto ? 'Mixto' : 'Unicomponente') : r.estado_programa || '—'),
+        header: vista === 'practica' ? 'Tipo' : 'Estado',
+        cell: ({ getValue }) => (
+          <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-semibold">
+            {String(getValue())}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'pares_validos',
+        header: 'Pares válidos',
+        cell: ({ row }) => (
+          <DataBarCell
+            value={row.original.pares_validos}
+            max={maxPares}
+            display={`n = ${row.original.pares_validos}`}
+            tone="indigo"
+          />
+        ),
+      },
+      {
+        accessorKey: 'promedio_inicial',
+        header: 'Prom. Inicial',
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs text-slate-400 italic">Suprimido</span>
+          ) : (
+            <span className="tabular-nums text-slate-700">
+              {row.original.promedio_inicial != null ? row.original.promedio_inicial.toFixed(2) : '—'}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'promedio_final',
+        header: 'Prom. Final',
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs text-slate-400 italic">Suprimido</span>
+          ) : (
+            <span className="tabular-nums font-semibold text-slate-900">
+              {row.original.promedio_final != null ? row.original.promedio_final.toFixed(2) : '—'}
+            </span>
+          ),
+      },
+      {
+        accessorKey: 'reduccion_promedio',
+        header: 'Reducción (pts)',
+        cell: ({ row }) => {
+          if (row.original.suprimido || row.original.reduccion_promedio == null) {
+            return <span className="text-xs text-slate-400 italic">Suprimido (n&lt;5)</span>;
+          }
+          const red = row.original.reduccion_promedio;
+          return (
+            <DataBarCell
+              value={red}
+              max={instrumento === 'PSS-10' ? 12 : 25}
+              display={`${red > 0 ? '+' : ''}${red.toFixed(2)} pts`}
+              tone={red >= metaPts ? 'emerald' : red > 0 ? 'amber' : 'rose'}
+            />
+          );
+        },
+      },
+      {
+        accessorKey: 'cumple_meta',
+        header: 'Meta operativa',
+        cell: ({ row }) => (
+          <CumpleMetaBadge cumple={row.original.cumple_meta} suprimido={row.original.suprimido} />
+        ),
+      },
+      {
+        accessorKey: 'semaforo',
+        header: 'Semáforo',
+        cell: ({ getValue }) => <SemaforoBadge estado={getValue()} />,
+      },
+    ],
+    [vista, maxPares, instrumento, metaPts],
+  );
 
   return (
     <div className="space-y-5">
-      {/* Header & Collapsible Filter Bar */}
-      <section className="rounded-2xl border border-slate-200/80 bg-white shadow-card overflow-hidden">
-        <div className="px-5 py-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold bg-teal-50 text-teal-700 border border-teal-200/80">
-                RG-02
-              </span>
-              <h2 className="font-display text-lg font-bold text-slate-900 tracking-tight">
-                Comparativo de Efectividad y Cumplimiento de Meta por Práctica (KPI-05)
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Instrumento <strong className="text-slate-700">{instrumento}</strong> · Meta operativa{' '}
-              <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte{' '}
-              <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-            </p>
-          </div>
-
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Instrument Segmented Toggle */}
-            <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200/80" role="group" aria-label="Selector de instrumento">
-              {(['PSS-10', 'PCL-5'] as const).map((inst) => (
-                <button
-                  key={inst}
-                  type="button"
-                  onClick={() => setInstrumento(inst)}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    instrumento === inst
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  {inst}
-                </button>
-              ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              <Filter className="w-3.5 h-3.5 text-slate-500" aria-hidden="true" />
-              <span>Filtros</span>
-              {activeFilterCount > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-teal-600 text-[10px] font-bold text-white">
-                  {activeFilterCount}
-                </span>
-              )}
-              {filtersOpen ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
-            </button>
-
-            <AiReportButton
-              reporte="RG-02"
-              corte={data?.corte || corte}
-              disabled={loading || !data}
-              filtros={{ semestre, instrumento, facultad: facultad || 'TODAS', vista }}
-              kpis={
-                kpi05
-                  ? {
-                      instrumento,
-                      meta_operativa_pts: metaPts,
-                      practicas_evaluables: kpi05.practicas_evaluables,
-                      practicas_cumplen_meta: kpi05.practicas_cumplen_meta,
-                      tasa_cumplimiento_meta_pct: kpi05.tasa_cumplimiento_meta,
-                      semaforo: kpi05.semaforo,
-                    }
-                  : null
-              }
-              grupos={filas.map((r: any) => ({
-                nombre: vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa,
-                n: Number(r.pares_validos || 0),
-                instrumento,
-                valor: r.reduccion_promedio,
-                semaforo: r.semaforo,
-              }))}
-            />
+            <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold tracking-wider uppercase">
+              RG-02 · Reporte Gerencial
+            </span>
+            <PowerBiHintBadge />
+            <span className="text-xs text-slate-500 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+              Corte: <strong className="text-slate-700">{formatFechaEs(data?.corte || corte)}</strong>
+            </span>
           </div>
+          <h2 className="text-xl font-bold text-slate-900 font-display tracking-tight mt-1">
+            Efectividad Comparativa por Práctica de Bienestar
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Evaluación de reducción promedio por técnica ({instrumento}) frente a meta operativa (≥ {metaPts.toFixed(1)} pts) y evidencia muestral (n ≥ 5).
+          </p>
         </div>
 
-        {filtersOpen && (
-          <div className="px-5 pb-5 pt-3 border-t border-slate-100 bg-slate-50/50 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Fecha de corte</span>
-                <div className="relative">
-                  <Calendar className="w-3.5 h-3.5 text-teal-600 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="date"
-                    value={corte}
-                    onChange={(e) => setCorte(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white pl-8 pr-3 py-2 text-xs font-medium text-slate-800"
-                  />
-                </div>
-              </label>
+        <AiReportButton
+          reporte="RG-02"
+          corte={data?.corte || corte}
+          filtros={{
+            instrumento,
+            semestre: semestre || 'TODOS',
+            facultad: facultad || 'TODAS',
+            vista,
+            seleccion_cruzada: crossKey || 'NINGUNA',
+          }}
+          kpis={{
+            kpi05_meta_practicas: kpi05 || null,
+            meta_operativa_pts: metaPts,
+          }}
+          grupos={filasCrossFiltradas
+            .filter((r) => !r.suprimido && r.pares_validos >= 5)
+            .map((r) => ({
+              nombre: vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa || r.codigo_practica,
+              n: r.pares_validos,
+              instrumento,
+              valor: r.reduccion_promedio,
+              semaforo: r.semaforo,
+            }))}
+          disabled={loading || !data}
+        />
+      </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Instrumento (separado)</span>
-                <select
-                  value={instrumento}
-                  onChange={(e) => setInstrumento(e.target.value as 'PSS-10' | 'PCL-5')}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="PSS-10">PSS-10 · Estrés percibido (0–40)</option>
-                  <option value="PCL-5">PCL-5 · Síntomas postraumáticos (0–80)</option>
-                </select>
-              </label>
+      {/* Power BI Slicers */}
+      <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm px-5 py-3.5 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-4">
+          <SlicerPills
+            label="Instrumento"
+            value={instrumento}
+            onChange={(val) => setInstrumento(val)}
+            options={[
+              { value: 'PSS-10', label: 'PSS-10 (Meta ≥ 4.0 pts)' },
+              { value: 'PCL-5', label: 'PCL-5 (Meta ≥ 10.0 pts)' },
+            ]}
+          />
+          <div className="hidden sm:block h-5 w-px bg-slate-200" aria-hidden="true" />
+          <SlicerPills
+            label="Nivel de análisis"
+            accent="slate"
+            value={vista}
+            onChange={(val) => setVista(val)}
+            options={[
+              { value: 'practica', label: 'Por Práctica' },
+              { value: 'programa', label: 'Por Programa / Cohorte' },
+            ]}
+          />
+        </div>
 
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Facultad / Área</span>
-                <select
-                  value={facultad}
-                  onChange={(e) => setFacultad(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="">Todas las facultades</option>
-                  {filtros?.facultades.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="block text-[11px] font-semibold text-slate-600 mb-1">Nivel de detalle</span>
-                <select
-                  value={vista}
-                  onChange={(e) => setVista(e.target.value as 'practica' | 'programa')}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-800"
-                >
-                  <option value="practica">Por Práctica Principal (P-01..P-04, MIXTO)</option>
-                  <option value="programa">Desglosado por Programa (Cohorte)</option>
-                </select>
-              </label>
-            </div>
-
-            {activeFilterCount > 0 && (
-              <div className="flex justify-end pt-2 border-t border-slate-200/70">
-                <button
-                  type="button"
-                  onClick={limpiarFiltros}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900"
-                >
-                  <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  Limpiar filtros
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((o) => !o)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-slate-700 text-xs font-semibold transition-colors self-start xl:self-auto"
+        >
+          <Filter className="w-3.5 h-3.5" aria-hidden="true" />
+          Filtros
+          {facultad && (
+            <span className="px-1.5 py-0.2 rounded-full bg-teal-600 text-white text-[10px] font-bold">
+              1
+            </span>
+          )}
+          {filtersOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
       </section>
 
+      {filtersOpen && (
+        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Fecha de corte
+            </label>
+            <input
+              type="date"
+              value={corte}
+              onChange={(e) => setCorte(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase mb-1">
+              Facultad / Área (recalcula n ≥ 5)
+            </label>
+            <select
+              value={facultad}
+              onChange={(e) => setFacultad(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-medium text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+            >
+              <option value="">Todas las facultades</option>
+              {(filtros?.facultades || []).map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setFacultad('');
+                setCrossKey(null);
+              }}
+              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+              Limpiar filtros
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Cross-Filter Banner */}
+      <CrossFilterBanner
+        items={
+          crossKey
+            ? [
+                {
+                  label: vista === 'practica' ? 'Práctica' : 'Programa',
+                  value: crossKey,
+                  onClear: () => setCrossKey(null),
+                },
+              ]
+            : []
+        }
+        onClearAll={() => setCrossKey(null)}
+      />
+
       {error && (
-        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+        <div className="rounded-2xl bg-rose-50 border border-rose-200 p-4 text-sm text-rose-800">
           {error}
         </div>
       )}
 
-      {/* Top Executive KPI Cards */}
+      {/* KPI Cards */}
       {loading && !data ? (
-        <KpiGridSkeleton count={4} />
+        <KpiGridSkeleton count={3} />
       ) : (
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <KpiCard
-            code="KPI-05"
+            code="KPI-05 · EFECTIVIDAD"
             title={`Prácticas que cumplen meta (${instrumento})`}
             value={
               kpi05?.tasa_cumplimiento_meta != null
-                ? `${Number(kpi05.tasa_cumplimiento_meta).toFixed(1)}`
+                ? `${kpi05.tasa_cumplimiento_meta.toFixed(1)}%`
                 : '—'
             }
-            unit={kpi05?.tasa_cumplimiento_meta != null ? '%' : undefined}
+            subtitle={`${kpi05?.practicas_cumplen_meta ?? 0} de ${kpi05?.practicas_evaluables ?? 0} prácticas evaluables (n ≥ 5)`}
+            metaLabel="Meta ≥ 80.0%"
             semaforo={kpi05?.semaforo || 'SIN_DATOS'}
-            metaLabel="Meta: ≥ 80%"
-            subtitle={
-              kpi05
-                ? `${kpi05.practicas_cumplen_meta} de ${kpi05.practicas_evaluables} evaluables`
-                : 'Sin evaluables'
-            }
-            progressPct={kpi05?.tasa_cumplimiento_meta ?? null}
             accent="teal"
             Icon={Award}
           />
-
           <KpiCard
             code="META OPERATIVA"
             title={`Umbral mínimo requerido (${instrumento})`}
             value={`≥ ${metaPts.toFixed(1)}`}
             unit="pts"
-            subtitle={instrumento === 'PSS-10' ? 'Reducción estrés percibido' : 'Cambio clínicamente relevante'}
+            subtitle={
+              instrumento === 'PSS-10'
+                ? 'Reducción estrés percibido (escala 0–40)'
+                : 'Cambio relevante síntomas trauma (0–80)'
+            }
             accent="indigo"
             Icon={Target}
           />
-
           <KpiCard
-            code="MEJOR DESEMPEÑO"
-            title={vista === 'practica' ? 'Práctica líder en reducción' : 'Cohorte líder en reducción'}
+            code={selectedRow ? 'SELECCIÓN CRUZADA' : 'MEJOR DESEMPEÑO'}
+            title={
+              selectedRow
+                ? `Detalle de ${rowKey(selectedRow)}`
+                : vista === 'practica'
+                  ? 'Práctica líder en reducción'
+                  : 'Cohorte líder en reducción'
+            }
             value={
               mejorPractica && mejorPractica.reduccion_promedio != null
                 ? `+${Number(mejorPractica.reduccion_promedio).toFixed(2)}`
                 : 'n < 5'
             }
-            unit={mejorPractica ? 'pts' : undefined}
+            unit={mejorPractica && mejorPractica.reduccion_promedio != null ? 'pts' : undefined}
             subtitle={
               mejorPractica
                 ? vista === 'practica'
-                  ? `${mejorPractica.codigo_practica} · n = ${mejorPractica.pares_validos}`
-                  : `${compactPrograma(mejorPractica.codigo_programa)} · n = ${mejorPractica.pares_validos}`
-                : 'Sin grupos con n ≥ 5'
+                  ? `${mejorPractica.codigo_practica} · n = ${mejorPractica.pares_validos} pares`
+                  : `${compactPrograma(mejorPractica.codigo_programa)} · n = ${mejorPractica.pares_validos} pares`
+                : 'Sin grupos evaluables (n ≥ 5)'
             }
             accent="emerald"
           />
+        </section>
+      )}
 
-          <KpiCard
-            code="MUESTRA TOTAL"
-            title="Pares válidos analizados al corte"
-            value={totalParesFilas.toLocaleString()}
-            unit="pares"
-            subtitle={`${evaluablesFilas.length} de ${filas.length} grupos evaluables`}
-            accent="sky"
+      {/* Visual 1: Barras Horizontales con markLine de Meta Operativa */}
+      {loading && !data ? (
+        <ChartSkeleton height={320} />
+      ) : (
+        <ChartCard
+          title={`Ranking de Reducción (${instrumento}) vs. Meta Operativa (≥ ${metaPts.toFixed(1)} pts)`}
+          subtitle="Barras horizontales ordenadas por reducción promedio con línea punteada de meta operativa."
+          contextBadge={`${evaluablesFilas.length} evaluables`}
+          option={chartHorizontalOption}
+          height={320}
+          ariaLabel={`Ranking horizontal de reducción ${instrumento}`}
+          exportFilename={`RG02_ranking_horizontal_${instrumento}_${corte}.png`}
+          interactiveHint
+          onItemClick={(params) => {
+            const target = evaluablesFilas[params.dataIndex];
+            if (!target) return;
+            const key = rowKey(target);
+            setCrossKey((prev) => (prev === key ? null : key));
+          }}
+        />
+      )}
+
+      {/* Visual 2: Gauge KPI-05 + Scatter Evidencia vs Reducción */}
+      {loading && !data ? (
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          <div className="lg:col-span-4">
+            <ChartSkeleton height={310} />
+          </div>
+          <div className="lg:col-span-8">
+            <ChartSkeleton height={310} />
+          </div>
+        </section>
+      ) : (
+        <section className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+          <ChartCard
+            className="lg:col-span-4"
+            title="Velocímetro KPI-05"
+            subtitle="% de prácticas evaluables que superan la meta operativa."
+            contextBadge={`${kpi05?.practicas_cumplen_meta ?? 0}/${kpi05?.practicas_evaluables ?? 0}`}
+            option={chartGaugeKpi05Option}
+            height={300}
+            ariaLabel={`Velocímetro KPI-05 para ${instrumento}`}
+            exportFilename={`RG02_gauge_kpi05_${instrumento}_${corte}.png`}
+          />
+
+          <ChartCard
+            className="lg:col-span-8"
+            title="Matriz Evidencia vs. Efectividad (Dispersión)"
+            subtitle="Pares válidos (eje X) vs. Reducción en pts (eje Y). Distingue técnicas con alta evidencia de grupos pequeños."
+            contextBadge={`n ≥ 5 · Meta ≥ ${metaPts.toFixed(1)} pts`}
+            option={chartScatterOption}
+            height={300}
+            ariaLabel={`Dispersión de pares válidos vs reducción ${instrumento}`}
+            exportFilename={`RG02_scatter_evidencia_${instrumento}_${corte}.png`}
+            interactiveHint
+            onItemClick={(params) => {
+              const target = evaluablesFilas[params.dataIndex];
+              if (!target) return;
+              const key = rowKey(target);
+              setCrossKey((prev) => (prev === key ? null : key));
+            }}
           />
         </section>
       )}
 
-      {/* 2 Interactive ECharts */}
+      <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-slate-100/80 border border-slate-200/80 text-xs text-slate-600">
+        <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
+        <p>
+          <strong>Lectura gerencial:</strong> Los resultados comparan asociaciones observadas por práctica en el corte actual y no implican causalidad experimental. Al filtrar por Facultad/Área se recalcula automáticamente la elegibilidad <code>ParesValidos ≥ 5</code>.
+        </p>
+      </div>
+
+      {/* PowerDataTable */}
       {loading && !data ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <ChartSkeleton height={280} />
-          <ChartSkeleton height={280} />
-        </div>
+        <TableSkeleton rows={5} />
       ) : (
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Reducción Promedio vs. Meta Operativa ({instrumento})
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Línea punteada marca el objetivo mínimo de ≥ {metaPts.toFixed(1)} puntos
-              </p>
-            </div>
-            {evaluablesFilas.length > 0 ? (
-              <EChartBox
-                option={chartRankingOption}
-                height={275}
-                ariaLabel={`Ranking de reducción promedio por práctica en ${instrumento}`}
-              />
-            ) : (
-              <SuppressedState context={facultad ? `la facultad ${facultad}` : 'el filtro seleccionado'} />
-            )}
-          </div>
-
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
-            <div className="mb-3">
-              <h3 className="font-display text-sm font-bold text-slate-900">
-                Comparativo Puntaje Inicial vs. Final ({instrumento})
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Solo se grafican grupos que cumplen el umbral de privacidad estadística (n ≥ 5)
-              </p>
-            </div>
-            {evaluablesFilas.length > 0 ? (
-              <EChartBox
-                option={chartPrePostOption}
-                height={275}
-                ariaLabel={`Comparativo de puntajes inicial y final por práctica en ${instrumento}`}
-              />
-            ) : (
-              <SuppressedState context={facultad ? `la facultad ${facultad}` : 'el filtro seleccionado'} />
-            )}
-          </div>
-        </section>
+        <PowerDataTable
+          title={
+            vista === 'practica'
+              ? `Matriz de Efectividad por Práctica (${instrumento})`
+              : `Matriz de Efectividad por Programa / Cohorte (${instrumento})`
+          }
+          subtitle="Ordena por reducción o evidencia muestral, busca rápidamente o exporta la vista filtrada a Excel."
+          caption={`Tabla comparativa de efectividad por ${vista} en ${instrumento}`}
+          data={filasCrossFiltradas}
+          columns={columns}
+          initialSorting={[{ id: 'reduccion_promedio', desc: true }]}
+          searchPlaceholder="Buscar práctica o programa..."
+          csvFilename={`RG02_efectividad_${vista}_${instrumento}_${corte}.csv`}
+          csvColumns={[
+            {
+              header: vista === 'practica' ? 'Código Práctica' : 'Código Programa',
+              accessor: (r) => (vista === 'practica' ? r.codigo_practica : r.codigo_programa),
+            },
+            { header: 'Nombre Práctica', accessor: (r) => r.nombre_practica },
+            { header: 'Pares Válidos', accessor: (r) => r.pares_validos },
+            { header: 'Promedio Inicial', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_inicial) },
+            { header: 'Promedio Final', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_final) },
+            { header: 'Reducción Promedio (pts)', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.reduccion_promedio) },
+            { header: 'Cumple Meta', accessor: (r) => (r.suprimido ? 'NO EVALUABLE' : r.cumple_meta ? 'SI' : 'NO') },
+            { header: 'Semáforo', accessor: (r) => r.semaforo },
+          ]}
+        />
       )}
-
-      {/* Detailed Table */}
-      {loading && !data ? (
-        <TableSkeleton rows={5} cols={7} />
-      ) : (
-        <section className="bg-white rounded-2xl border border-slate-200/80 shadow-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="w-1.5 h-5 rounded-full bg-teal-500 shrink-0" aria-hidden="true" />
-              <h3 id={captionId} className="font-display text-sm font-bold text-slate-900 tracking-tight">
-                {vista === 'practica'
-                  ? `Ranking de efectividad por Práctica Principal — ${instrumento}`
-                  : `Desglose de efectividad por Programa (Cohorte) — ${instrumento}`}
-              </h3>
-            </div>
-            <span className="text-xs font-medium text-slate-500 tabular-nums">
-              {filas.length} {vista === 'practica' ? 'prácticas' : 'programas'}
-            </span>
-          </div>
-
-          {!filas.length ? (
-            <EmptyState
-              title="Sin datos para este filtro"
-              description="Cambia de facultad, semestre o instrumento para revisar el desempeño de las prácticas."
-              actionLabel={activeFilterCount > 0 ? 'Limpiar filtros' : undefined}
-              onAction={activeFilterCount > 0 ? limpiarFiltros : undefined}
-              icon="filter"
-            />
-          ) : (
-            <div
-              tabIndex={0}
-              role="region"
-              aria-labelledby={captionId}
-              className="table-wrapper table-wrapper--paged !border-0 !rounded-none"
-            >
-              <table className="mwg-table">
-                <caption className="sr-only">
-                  Comparativo de efectividad y cumplimiento de meta por práctica en {instrumento} al corte {formatFechaEs(corte)}
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">{vista === 'practica' ? 'Práctica principal' : 'Programa (Cohorte)'}</th>
-                    {vista === 'programa' && <th scope="col">Práctica</th>}
-                    <th scope="col">Pares (n)</th>
-                    <th scope="col">Inicial</th>
-                    <th scope="col">Final</th>
-                    <th scope="col">
-                      <button
-                        type="button"
-                        onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-                        className="inline-flex items-center gap-1 hover:text-slate-900 uppercase tracking-wider"
-                      >
-                        Reducción
-                        <ArrowUpDown className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    </th>
-                    <th scope="col">Meta</th>
-                    <th scope="col">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filas.map((r: any) => (
-                    <tr key={vista === 'practica' ? r.id_practica : r.id_programa}>
-                      <th scope="row">
-                        {vista === 'practica' ? (
-                          <div>
-                            <div className="font-bold text-slate-900">{r.codigo_practica}</div>
-                            <div className="text-[11px] font-normal text-slate-500">
-                              {r.nombre_practica}
-                              {r.es_mixto !== undefined && <> · {r.es_mixto ? 'Mixto' : 'Unicomponente'}</>}
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="font-bold text-slate-900">{compactPrograma(r.codigo_programa)}</div>
-                            <div className="text-[11px] font-normal text-slate-500">{r.estado_programa}</div>
-                          </div>
-                        )}
-                      </th>
-                      {vista === 'programa' && (
-                        <td data-label="Práctica">
-                          <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200/80">
-                            {r.codigo_practica}
-                          </span>
-                        </td>
-                      )}
-                      <td data-label="Pares (n)" className="tabular-nums font-semibold text-slate-700">
-                        {r.pares_validos}
-                      </td>
-                      <td data-label="Inicial" className="tabular-nums text-slate-600">
-                        {r.suprimido ? 'Suprimido' : r.promedio_inicial != null ? r.promedio_inicial.toFixed(2) : '—'}
-                      </td>
-                      <td data-label="Final" className="tabular-nums text-slate-600">
-                        {r.suprimido ? 'Suprimido' : r.promedio_final != null ? r.promedio_final.toFixed(2) : '—'}
-                      </td>
-                      <td data-label="Reducción" className="tabular-nums font-bold">
-                        {r.suprimido ? (
-                          <span className="text-slate-400 font-normal">n &lt; 5</span>
-                        ) : r.reduccion_promedio != null ? (
-                          <span className={r.cumple_meta ? 'text-emerald-700' : 'text-amber-700'}>
-                            {r.reduccion_promedio > 0 ? '+' : ''}
-                            {r.reduccion_promedio.toFixed(2)} pts
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td data-label="Meta" className="tabular-nums text-slate-500 text-xs font-medium">
-                        ≥ {metaPts.toFixed(1)} pts
-                      </td>
-                      <td data-label="Estado">
-                        <CumpleMetaBadge cumple={r.cumple_meta} suprimido={r.suprimido} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
-
-      <details className="rounded-2xl border border-slate-200/80 bg-white px-5 py-3 text-xs text-slate-600 shadow-card">
-        <summary className="cursor-pointer font-semibold text-slate-700 inline-flex items-center gap-2 select-none">
-          <Info className="w-4 h-4 text-teal-600" aria-hidden="true" />
-          Reglas de cómputo aplicadas en RG-02 (KPI-05)
-        </summary>
-        <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4 leading-relaxed">
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Separación de escalas</strong>
-            PSS-10 y PCL-5 se analizan siempre de forma independiente desde <code>dm.vw_HechoEfectividadPractica</code>.
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Filtro previo por Facultad</strong>
-            Al filtrar por facultad/área, el umbral de <strong>n ≥ 5 pares válidos</strong> se recalcula sobre el subconjunto filtrado.
-          </div>
-          <div>
-            <strong className="text-slate-900 block mb-0.5">Metas operativas</strong>
-            PSS-10 exige <code>≥ 4.0 pts</code> de reducción; PCL-5 exige <code>≥ 10.0 pts</code> sobre el mismo evento índice.
-          </div>
-        </div>
-      </details>
     </div>
   );
 }
