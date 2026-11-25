@@ -202,6 +202,30 @@ export interface EstudiantesOltpResponse {
   estudiantes: EstudianteOltpRow[];
 }
 
+export interface CategoriaEventoOltp {
+  id_categoria_evento: number;
+  codigo_categoria: string;
+  nombre_categoria: string;
+}
+
+export interface EventoIndiceOltpRow {
+  id_evento_indice: number;
+  id_estudiante: number;
+  codigo_estudiante: string;
+  nombres: string;
+  apellidos: string;
+  id_categoria_evento: number;
+  codigo_categoria: string;
+  nombre_categoria: string;
+  codigo_evento_local: string;
+  anio_ocurrencia_aprox: number | null;
+  descripcion_evento: string | null;
+  antecedente_clinico_externo: boolean;
+  requiere_derivacion: boolean;
+  vigente: boolean;
+  creado_en: string;
+}
+
 export const api = {
   login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
   logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
@@ -289,6 +313,17 @@ export const api = {
       '/operacion/asignaciones',
       body,
     ),
+  getCategoriasEvento: () => apiGet<CategoriaEventoOltp[]>('/operacion/categorias-evento'),
+  getEventosIndice: (params?: { id_estudiante?: number; codigo_estudiante?: string }) =>
+    apiGet<EventoIndiceOltpRow[]>('/operacion/eventos-indice', params),
+  crearEventoIndice: (body: {
+    id_estudiante: number;
+    id_categoria_evento: number;
+    anio_ocurrencia_aprox?: number;
+    descripcion_evento?: string;
+    antecedente_clinico_externo?: boolean;
+    requiere_derivacion?: boolean;
+  }) => apiPost<{ ok: boolean; mensaje: string; evento: EventoIndiceOltpRow }>('/operacion/eventos-indice', body),
   getSesiones: (id_programa?: string) => apiGet<any[]>('/operacion/sesiones', { id_programa }),
   getOportunidadesAbiertas: (id_programa?: string) =>
     apiGet<any[]>('/operacion/oportunidades-abiertas', { id_programa }),

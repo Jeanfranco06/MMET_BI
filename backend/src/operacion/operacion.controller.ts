@@ -1,5 +1,6 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsIn,
@@ -71,6 +72,35 @@ export class CrearAsignacionDto {
   @IsOptional()
   @IsDateString()
   fecha_inscripcion?: string;
+}
+
+export class CrearEventoIndiceDto {
+  @IsInt()
+  @Min(1)
+  id_estudiante: number;
+
+  @IsInt()
+  @Min(1)
+  id_categoria_evento: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1950)
+  @Max(2030)
+  anio_ocurrencia_aprox?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  descripcion_evento?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  antecedente_clinico_externo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiere_derivacion?: boolean;
 }
 
 export class RegistrarAsistenciaDto {
@@ -152,7 +182,7 @@ export class OperacionController {
   constructor(private readonly operacionService: OperacionService) {}
 
   @Get('estudiantes')
-  @Roles('ADMIN', 'COORDINACION')
+  @Roles('ADMIN', 'COORDINACION', 'EVALUACION')
   getEstudiantes(
     @Query('buscar') buscar?: string,
     @Query('facultad') facultad?: string,
@@ -177,6 +207,30 @@ export class OperacionController {
   @Roles('ADMIN', 'COORDINACION')
   crearAsignacion(@Body() dto: CrearAsignacionDto) {
     return this.operacionService.crearAsignacion(dto);
+  }
+
+  @Get('categorias-evento')
+  @Roles('ADMIN', 'EVALUACION', 'COORDINACION')
+  getCategoriasEvento() {
+    return this.operacionService.getCategoriasEvento();
+  }
+
+  @Get('eventos-indice')
+  @Roles('ADMIN', 'EVALUACION', 'COORDINACION')
+  getEventosIndice(
+    @Query('id_estudiante') idEstudiante?: string,
+    @Query('codigo_estudiante') codigoEstudiante?: string,
+  ) {
+    return this.operacionService.getEventosIndice({
+      idEstudiante: idEstudiante ? Number(idEstudiante) : undefined,
+      codigoEstudiante: codigoEstudiante?.trim() || undefined,
+    });
+  }
+
+  @Post('eventos-indice')
+  @Roles('ADMIN', 'EVALUACION', 'COORDINACION')
+  crearEventoIndice(@Body() dto: CrearEventoIndiceDto) {
+    return this.operacionService.crearEventoIndice(dto);
   }
 
   @Get('sesiones')

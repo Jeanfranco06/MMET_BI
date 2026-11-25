@@ -307,31 +307,72 @@ FROM dbo.sesiones
 WHERE estado_sesion <> N'PROGRAMADA';
 
 -- ============================================================================
--- 5. EVENTOS ÍNDICE CODIFICADOS (~40% de estudiantes, sin texto libre)
+-- 5. EVENTOS ÍNDICE (~40% de estudiantes; narración y flags solo en OLTP)
+--    El ETL excluye descripcion_evento y flags operativos al cargar MMET_BI_DM.
 -- ============================================================================
 
+;WITH evt1_base AS (
+    SELECT
+        e.id_estudiante,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-CAT-', e.id_estudiante))) AS BIGINT)) % 6 + 1 AS SMALLINT) AS id_cat,
+        CAST(2019 + (ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-ANIO-', e.id_estudiante))) AS BIGINT)) % 7) AS SMALLINT) AS anio,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-ANT-', e.id_estudiante))) AS BIGINT)) % 100 AS INT) AS u_ant,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-DER-', e.id_estudiante))) AS BIGINT)) % 100 AS INT) AS u_der
+    FROM dbo.estudiantes e
+    WHERE CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-PROB-', e.id_estudiante))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 < 0.40
+)
 INSERT INTO dbo.eventos_indice (
-    id_estudiante, id_categoria_evento, codigo_evento_local, anio_ocurrencia_aprox
+    id_estudiante, id_categoria_evento, codigo_evento_local, anio_ocurrencia_aprox,
+    descripcion_evento, antecedente_clinico_externo, requiere_derivacion
 )
 SELECT
-    e.id_estudiante,
-    CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-CAT-', e.id_estudiante))) AS BIGINT)) % 6 + 1 AS SMALLINT),
+    id_estudiante,
+    id_cat,
     N'EVT-01',
-    CAST(2019 + (ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-ANIO-', e.id_estudiante))) AS BIGINT)) % 7) AS SMALLINT)
-FROM dbo.estudiantes e
-WHERE CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT1-PROB-', e.id_estudiante))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 < 0.40;
+    anio,
+    CASE id_cat
+        WHEN 1 THEN N'Relato breve de incidente vehicular o lesión aguda reportado en entrevista de orientación.'
+        WHEN 2 THEN N'Exposición a evento climático extremo o desastre local con impacto en vivienda/entorno familiar.'
+        WHEN 3 THEN N'Situación de conflicto o violencia interpersonal referida durante la evaluación inicial.'
+        WHEN 4 THEN N'Fallecimiento repentino de familiar cercano con repercusión emocional en el ciclo académico.'
+        WHEN 5 THEN N'Hospitalización o emergencia médica súbita propia o de familiar directo.'
+        ELSE N'Suceso potencialmente traumático codificado para seguimiento no clínico en el programa.'
+    END,
+    CAST(CASE WHEN u_ant < 18 THEN 1 ELSE 0 END AS BIT),
+    CAST(CASE WHEN u_der < 10 THEN 1 ELSE 0 END AS BIT)
+FROM evt1_base;
 
 -- ~12% de estudiantes con evento índice registran un segundo evento codificado
+;WITH evt2_base AS (
+    SELECT
+        ev.id_estudiante,
+        CAST((ev.id_categoria_evento % 6) + 1 AS SMALLINT) AS id_cat,
+        CAST(2020 + (ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-ANIO-', ev.id_estudiante))) AS BIGINT)) % 6) AS SMALLINT) AS anio,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-ANT-', ev.id_estudiante))) AS BIGINT)) % 100 AS INT) AS u_ant,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-DER-', ev.id_estudiante))) AS BIGINT)) % 100 AS INT) AS u_der
+    FROM dbo.eventos_indice ev
+    WHERE CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-PROB-', ev.id_estudiante))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 < 0.12
+)
 INSERT INTO dbo.eventos_indice (
-    id_estudiante, id_categoria_evento, codigo_evento_local, anio_ocurrencia_aprox
+    id_estudiante, id_categoria_evento, codigo_evento_local, anio_ocurrencia_aprox,
+    descripcion_evento, antecedente_clinico_externo, requiere_derivacion
 )
 SELECT
-    ev.id_estudiante,
-    CAST((ev.id_categoria_evento % 6) + 1 AS SMALLINT),
+    id_estudiante,
+    id_cat,
     N'EVT-02',
-    CAST(2020 + (ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-ANIO-', ev.id_estudiante))) AS BIGINT)) % 6) AS SMALLINT)
-FROM dbo.eventos_indice ev
-WHERE CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EVT2-PROB-', ev.id_estudiante))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 < 0.12;
+    anio,
+    CASE id_cat
+        WHEN 1 THEN N'Segundo evento referido: incidente de tránsito o lesión relevante en años recientes.'
+        WHEN 2 THEN N'Segundo evento referido: afectación por fenómeno natural en su localidad.'
+        WHEN 3 THEN N'Segundo evento referido: exposición a situación de violencia interpersonal.'
+        WHEN 4 THEN N'Segundo evento referido: duelo por pérdida súbita en el entorno cercano.'
+        WHEN 5 THEN N'Segundo evento referido: crisis médica familiar de atención urgente.'
+        ELSE N'Segundo evento potencialmente traumático registrado para seguimiento operativo.'
+    END,
+    CAST(CASE WHEN u_ant < 22 THEN 1 ELSE 0 END AS BIT),
+    CAST(CASE WHEN u_der < 14 THEN 1 ELSE 0 END AS BIT)
+FROM evt2_base;
 
 -- ============================================================================
 -- 6. ASIGNACIONES (~1,330 inscripciones) + HISTORIAL DE RETIROS

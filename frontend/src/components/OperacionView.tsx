@@ -13,11 +13,18 @@ import {
   GraduationCap,
   RefreshCw,
   Search,
+  ShieldAlert,
   UserCheck,
   UserPlus,
   X,
 } from 'lucide-react';
-import { api, type EstudianteOltpRow, type FiltrosResponse } from '@/lib/api';
+import {
+  api,
+  type CategoriaEventoOltp,
+  type EstudianteOltpRow,
+  type EventoIndiceOltpRow,
+  type FiltrosResponse,
+} from '@/lib/api';
 import { ResponsiveTable, type TableColumn } from './ResponsiveTable';
 import { ModalDialog } from './ModalDialog';
 import { TableSkeleton } from './UiStates';
@@ -42,40 +49,41 @@ const TAB_HEADER_META: Record<
 > = {
   estudiantes: {
     layer: 'OLTP',
-    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    layerBadge: 'Gestión Operativa',
     title: 'Estudiantes e Inscripciones',
     description:
-      'Padrón universitario (dbo.estudiantes) y matrícula en uno o múltiples programas (dbo.asignaciones) con generación automática de oportunidades PSS-10.',
+      'Padrón universitario y matrícula en uno o múltiples programas con generación automática de evaluaciones PSS-10.',
   },
   asistencias: {
     layer: 'OLTP',
-    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    layerBadge: 'Gestión Operativa',
     title: 'Registro de Asistencias',
-    description: 'Captura y actualización auditada de asistencia estudiantil por sesión en dbo.asistencias.',
+    description: 'Captura y actualización auditada de asistencia estudiantil por sesión realizada.',
   },
   sesiones: {
     layer: 'OLTP',
-    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    layerBadge: 'Gestión Operativa',
     title: 'Programación y Control de Sesiones',
-    description: 'Calendario operativo de sesiones, modalidad y práctica técnica registrada en dbo.sesiones.',
+    description: 'Calendario operativo de sesiones, modalidad y práctica técnica asignada.',
   },
   correcciones: {
     layer: 'OLTP',
-    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    layerBadge: 'Gestión Operativa',
     title: 'Corrección Versionada de Evaluaciones',
-    description: 'Gestión de nuevas versiones con motivo de auditoría en dbo.resultados_evaluacion.',
+    description: 'Gestión de nuevas versiones de evaluaciones con motivo de auditoría y seguimiento de eventos índice.',
   },
   etl: {
     layer: 'ETL',
-    layerBadge: 'Capa Analítica · ETL hacia Data Mart (dm.*)',
+    layerBadge: 'Actualización Analítica · ETL',
     title: 'Control ETL & Calidad del Data Mart',
-    description: 'Ejecución idempotente de dm.usp_ejecutar_etl, métricas de carga y monitoreo de incidencias en dm.*.',
+    description: 'Sincronización de indicadores analíticos por fecha de corte y monitoreo de incidencias de calidad.',
   },
 };
 
 export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: OperacionViewProps) {
   const canManageSessions = userRole === 'ADMIN' || userRole === 'COORDINACION';
   const canCorrectEval = userRole === 'ADMIN' || userRole === 'EVALUACION';
+  const canManageEventos = userRole === 'ADMIN' || userRole === 'EVALUACION' || userRole === 'COORDINACION';
   const isAdmin = userRole === 'ADMIN';
 
   const [idPrograma, setIdPrograma] = useState<string>('');
@@ -123,6 +131,21 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
   const [naProgramaId, setNaProgramaId] = useState('');
   const [naFecha, setNaFecha] = useState('2026-11-25');
   const [naBusy, setNaBusy] = useState(false);
+
+  // 0b. Eventos Índice OLTP (RQ-BI-04 — narraciones y flags solo en MMET_BI_OLTP)
+  const [categoriasEvento, setCategoriasEvento] = useState<CategoriaEventoOltp[]>([]);
+  const [eventosIndice, setEventosIndice] = useState<EventoIndiceOltpRow[]>([]);
+  const [evBuscar, setEvBuscar] = useState('');
+  const [evLoading, setEvLoading] = useState(false);
+  const [evModalOpen, setEvModalOpen] = useState(false);
+  const [evEstId, setEvEstId] = useState('');
+  const [evCatId, setEvCatId] = useState('');
+  const [evAnio, setEvAnio] = useState('2025');
+  const [evDesc, setEvDesc] = useState('');
+  const [evAntExt, setEvAntExt] = useState(false);
+  const [evReqDer, setEvReqDer] = useState(false);
+  const [evBusy, setEvBusy] = useState(false);
+  const [evStudentHistory, setEvStudentHistory] = useState<EventoIndiceOltpRow[]>([]);
 
   // 1. Asistencia form
   const [asisSesionId, setAsisSesionId] = useState<string>('');
@@ -181,7 +204,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
   };
 
   const cargarEstudiantes = async (pageToLoad = estPage) => {
-    if (!canManageSessions) return;
+    if (!canManageEventos) return;
     setEstLoading(true);
     try {
       const res = await api.getEstudiantes({
@@ -199,6 +222,23 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     }
   };
 
+  const cargarEventosIndice = async (codigoFiltro = evBuscar) => {
+    if (!canManageEventos) return;
+    setEvLoading(true);
+    try {
+      const [cats, evs] = await Promise.all([
+        categoriasEvento.length ? Promise.resolve(categoriasEvento) : api.getCategoriasEvento(),
+        api.getEventosIndice({ codigo_estudiante: codigoFiltro.trim() || undefined }),
+      ]);
+      setCategoriasEvento(cats);
+      setEventosIndice(evs);
+    } catch (e: any) {
+      showToast('error', e.message || 'Error al cargar los eventos índice OLTP.');
+    } finally {
+      setEvLoading(false);
+    }
+  };
+
   useEffect(() => {
     cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -208,8 +248,73 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     if (activeTab === 'estudiantes' && canManageSessions) {
       cargarEstudiantes(estPage);
     }
+    if ((activeTab === 'correcciones' || activeTab === 'estudiantes') && canManageEventos) {
+      cargarEventosIndice();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, estPage, estFacultad]);
+
+  useEffect(() => {
+    if (!evModalOpen || !evEstId) {
+      setEvStudentHistory([]);
+      return;
+    }
+    api
+      .getEventosIndice({ id_estudiante: Number(evEstId) })
+      .then(setEvStudentHistory)
+      .catch(() => setEvStudentHistory([]));
+  }, [evModalOpen, evEstId]);
+
+  const openEventoModal = async (est?: EstudianteOltpRow) => {
+    if (!estudiantes.length && canManageEventos) {
+      await cargarEstudiantes(1);
+    }
+    let cats = categoriasEvento;
+    if (!cats.length) {
+      try {
+        cats = await api.getCategoriasEvento();
+        setCategoriasEvento(cats);
+      } catch {
+        cats = [];
+      }
+    }
+    setEvEstId(est ? String(est.id_estudiante) : String(estudiantes[0]?.id_estudiante || ''));
+    setEvCatId(String(cats[0]?.id_categoria_evento || '1'));
+    setEvAnio('2025');
+    setEvDesc('');
+    setEvAntExt(false);
+    setEvReqDer(false);
+    setEvModalOpen(true);
+  };
+
+  const handleCrearEventoIndice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEvBusy(true);
+    try {
+      const res = await api.crearEventoIndice({
+        id_estudiante: Number(evEstId),
+        id_categoria_evento: Number(evCatId),
+        anio_ocurrencia_aprox: evAnio ? Number(evAnio) : undefined,
+        descripcion_evento: evDesc.trim() || undefined,
+        antecedente_clinico_externo: evAntExt,
+        requiere_derivacion: evReqDer,
+      });
+      showToast('success', res.mensaje);
+      setEvDesc('');
+      setEvAntExt(false);
+      setEvReqDer(false);
+      await cargarEventosIndice();
+      if (evEstId) {
+        const hist = await api.getEventosIndice({ id_estudiante: Number(evEstId) });
+        setEvStudentHistory(hist);
+      }
+      onDataMutated();
+    } catch (err: any) {
+      showToast('error', err.message);
+    } finally {
+      setEvBusy(false);
+    }
+  };
 
   const handleCrearEstudiante = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -498,16 +603,92 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
     },
     {
       key: 'acc',
-      header: 'Matrícula',
+      header: 'Acciones',
       render: (r) => (
-        <button
-          type="button"
-          onClick={() => openInscribirModal(r)}
-          className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 transition-colors"
-        >
-          <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-          Inscribir
-        </button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => openInscribirModal(r)}
+            className="inline-flex items-center gap-1 rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 hover:bg-teal-100 transition-colors"
+          >
+            <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+            Inscribir
+          </button>
+          <button
+            type="button"
+            onClick={() => openEventoModal(r)}
+            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition-colors"
+          >
+            <ShieldAlert className="w-3.5 h-3.5" aria-hidden="true" />
+            Evento
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const evCols: TableColumn<EventoIndiceOltpRow>[] = [
+    {
+      key: 'est',
+      header: 'Estudiante',
+      isRowHeader: true,
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="font-mono font-bold text-slate-900 text-xs">{r.codigo_estudiante}</div>
+          <div className="text-[11px] text-slate-500 truncate">
+            {r.apellidos}, {r.nombres}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'cod',
+      header: 'Código / Año',
+      render: (r) => (
+        <span className="font-mono text-xs font-semibold text-slate-800">
+          {r.codigo_evento_local}
+          {r.anio_ocurrencia_aprox ? ` · ${r.anio_ocurrencia_aprox}` : ''}
+        </span>
+      ),
+    },
+    {
+      key: 'cat',
+      header: 'Categoría',
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-slate-800">{r.nombre_categoria}</div>
+          <div className="text-[10px] font-mono text-slate-500">{r.codigo_categoria}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'desc',
+      header: 'Descripción breve',
+      render: (r) => (
+        <p className="text-xs text-slate-600 max-w-xs line-clamp-2" title={r.descripcion_evento || ''}>
+          {r.descripcion_evento || <span className="italic text-slate-400">Sin descripción registrada</span>}
+        </p>
+      ),
+    },
+    {
+      key: 'flags',
+      header: 'Indicadores operativos',
+      render: (r) => (
+        <div className="flex flex-wrap gap-1">
+          {r.antecedente_clinico_externo && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-800 border border-indigo-200">
+              Antecedente externo
+            </span>
+          )}
+          {r.requiere_derivacion && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-800 border border-rose-200">
+              Requiere derivación
+            </span>
+          )}
+          {!r.antecedente_clinico_externo && !r.requiere_derivacion && (
+            <span className="text-[11px] text-slate-400">Seguimiento regular</span>
+          )}
+        </div>
       ),
     },
   ];
@@ -618,6 +799,15 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
 
               <button
                 type="button"
+                onClick={() => openEventoModal()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-amber-700 transition-colors"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" aria-hidden="true" />
+                Registrar Evento Índice
+              </button>
+
+              <button
+                type="button"
                 onClick={() => cargarEstudiantes(estPage)}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
@@ -684,7 +874,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
                   Padrón de Estudiantes ({estPaginacion.totalRegistros.toLocaleString('es-PE')})
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Datos completos de <code>dbo.estudiantes</code> y programas matriculados en <code>dbo.asignaciones</code>.
+                  Listado de estudiantes registrados y programas en los que se encuentran matriculados.
                 </p>
               </div>
             </div>
@@ -739,7 +929,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
           ) : (
             <>
               <ResponsiveTable
-                caption="Padrón de estudiantes registrados en dbo.estudiantes"
+                caption="Padrón de estudiantes registrados"
                 columns={estCols}
                 rows={estudiantes}
                 rowKey={(r) => r.id_estudiante}
@@ -786,7 +976,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
                 Registrar o Actualizar Asistencia por Sesión
               </h3>
               <p className="text-xs text-slate-500">
-                Solo admite sesiones en estado <code>REALIZADA</code>. Cada cambio genera auditoría temporal en <code>dbo.historial_asistencias</code>.
+                Solo admite sesiones en estado <code>REALIZADA</code>. Cada cambio queda registrado con historial de auditoría.
               </p>
             </div>
           </div>
@@ -876,18 +1066,82 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
         )
       )}
 
-      {/* TAB 3: CORRECCIONES */}
+      {/* TAB 3: CORRECCIONES + EVENTOS ÍNDICE OLTP (RQ-BI-04) */}
       {activeTab === 'correcciones' && canCorrectEval && (
-        loading && !oportunidades.length ? (
-          <TableSkeleton rows={6} cols={6} />
-        ) : (
-          <ResponsiveTable
-            caption="Oportunidades de evaluación PSS-10 / PCL-5 y corrección versionada"
-            columns={opCols}
-            rows={oportunidades}
-            rowKey={(r) => r.id_oportunidad}
-          />
-        )
+        <div className="space-y-5">
+          {loading && !oportunidades.length ? (
+            <TableSkeleton rows={6} cols={6} />
+          ) : (
+            <ResponsiveTable
+              caption="Oportunidades de evaluación PSS-10 / PCL-5 y corrección versionada"
+              columns={opCols}
+              rows={oportunidades}
+              rowKey={(r) => r.id_oportunidad}
+            />
+          )}
+
+          {/* Panel OLTP: Eventos Índice (RQ-BI-04) */}
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 border border-amber-200/80 flex items-center justify-center">
+                  <ShieldAlert className="w-4 h-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className="font-display text-sm font-bold text-slate-900">
+                    Eventos Índice Registrados
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Registro confidencial de sucesos relevantes para seguimiento psicológico; no se incluye en reportes analíticos.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    cargarEventosIndice(evBuscar);
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <input
+                    type="search"
+                    placeholder="Filtrar por código (ej. UNT26-EST-)…"
+                    value={evBuscar}
+                    onChange={(e) => setEvBuscar(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-800 w-56 focus:bg-white focus:border-teal-500 focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Filtrar
+                  </button>
+                </form>
+                <button
+                  type="button"
+                  onClick={() => openEventoModal()}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-700 transition-colors"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5" aria-hidden="true" />
+                  Registrar Evento Índice
+                </button>
+              </div>
+            </div>
+
+            {evLoading ? (
+              <TableSkeleton rows={5} cols={5} />
+            ) : (
+              <ResponsiveTable
+                caption="Eventos índice registrados para seguimiento psicológico"
+                columns={evCols}
+                rows={eventosIndice}
+                rowKey={(r) => r.id_evento_indice}
+              />
+            )}
+          </section>
+        </div>
       )}
 
       {/* TAB 4: CONTROL ETL (ADMIN) */}
@@ -903,7 +1157,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
                   Sincronización Idempotente del Data Mart (ETL)
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Ejecuta <code>dm.usp_ejecutar_etl @fecha_corte</code>, actualiza dimensiones/hechos y registra incidencias de calidad.
+                  Actualiza las tablas analíticas a la fecha de corte seleccionada y valida incidencias de calidad de datos.
                 </p>
               </div>
             </div>
@@ -1109,7 +1363,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
         open={estModalOpen}
         onClose={() => setEstModalOpen(false)}
         title="Registrar Estudiante"
-        subtitle="Inserta un nuevo registro universitario en dbo.estudiantes (edad >= 18, ciclo 1–14)."
+        subtitle="Ingresa los datos académicos y de contacto del estudiante (edad mínima: 18 años)."
       >
         <form onSubmit={handleCrearEstudiante} className="space-y-3 text-sm">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1276,7 +1530,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
         open={asigModalOpen}
         onClose={() => setAsigModalOpen(false)}
         title="Inscribir Estudiante en Programa"
-        subtitle="Registra matrícula en dbo.asignaciones (permite múltiples programas por estudiante)."
+        subtitle="Asigna al estudiante a un programa de meditación o mindfulness (admite múltiples inscripciones)."
       >
         <form onSubmit={handleCrearAsignacion} className="space-y-3 text-sm">
           <label className="block">
@@ -1344,6 +1598,166 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
               {naBusy ? 'Inscribiendo…' : 'Confirmar inscripción'}
             </button>
           </div>
+        </form>
+      </ModalDialog>
+
+      {/* Modal: Registrar Evento Índice (OLTP · RQ-BI-04) */}
+      <ModalDialog
+        open={evModalOpen}
+        onClose={() => setEvModalOpen(false)}
+        title="Registrar Evento Índice"
+        subtitle="Seguimiento confidencial de apoyo psicológico (no constituye diagnóstico clínico)."
+      >
+        <form onSubmit={handleCrearEventoIndice} className="space-y-3.5 text-sm">
+          <div className="rounded-xl bg-amber-50/80 border border-amber-200/80 p-3 text-[11px] text-amber-950 leading-relaxed">
+            <strong>Confidencialidad:</strong> la descripción y los indicadores de seguimiento son de uso interno del
+            equipo de bienestar y no aparecen en los reportes estadísticos ni paneles gerenciales.
+          </div>
+
+          <label className="block">
+            <span className="block text-xs font-semibold text-slate-700 mb-1">Estudiante</span>
+            <select
+              required
+              value={evEstId}
+              onChange={(e) => setEvEstId(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+            >
+              <option value="">Selecciona un estudiante…</option>
+              {estudiantes.map((e) => (
+                <option key={e.id_estudiante} value={e.id_estudiante}>
+                  {e.codigo_estudiante} — {e.apellidos}, {e.nombres}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="block sm:col-span-2">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Categoría del evento índice</span>
+              <select
+                required
+                value={evCatId}
+                onChange={(e) => setEvCatId(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+              >
+                {categoriasEvento.map((c) => (
+                  <option key={c.id_categoria_evento} value={c.id_categoria_evento}>
+                    {c.codigo_categoria} · {c.nombre_categoria}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="block text-xs font-semibold text-slate-700 mb-1">Año aprox. (opc.)</span>
+              <input
+                type="number"
+                min={1950}
+                max={2030}
+                value={evAnio}
+                onChange={(e) => setEvAnio(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+              />
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="block text-xs font-semibold text-slate-700 mb-1">
+              Descripción breve / contexto del suceso (solo uso interno del psicólogo, máx. 500 car.)
+            </span>
+            <textarea
+              rows={3}
+              maxLength={500}
+              placeholder="Ej. Relato breve de contexto para seguimiento psicológico (no registrar diagnóstico clínico)…"
+              value={evDesc}
+              onChange={(e) => setEvDesc(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs resize-none"
+            />
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={evAntExt}
+                onChange={(e) => setEvAntExt(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300 text-teal-600"
+              />
+              <span>Antecedente clínico externo reportado</span>
+            </label>
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={evReqDer}
+                onChange={(e) => setEvReqDer(e.target.checked)}
+                className="mt-0.5 rounded border-slate-300 text-rose-600"
+              />
+              <span>Requiere derivación a bienestar / especialista</span>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setEvModalOpen(false)}
+              className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Cerrar
+            </button>
+            <button
+              type="submit"
+              disabled={evBusy || !evEstId}
+              className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {evBusy ? 'Registrando…' : 'Registrar evento índice'}
+            </button>
+          </div>
+
+          {evEstId && (
+            <div className="pt-3 border-t border-slate-100 space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Eventos índice registrados del estudiante ({evStudentHistory.length})
+              </div>
+              {evStudentHistory.length === 0 ? (
+                <p className="text-xs text-slate-400">
+                  Este estudiante aún no tiene eventos índice registrados.
+                </p>
+              ) : (
+                <ul className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {evStudentHistory.map((ev) => (
+                    <li
+                      key={ev.id_evento_indice}
+                      className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-bold text-slate-900">
+                          {ev.codigo_evento_local} · {ev.nombre_categoria}
+                        </span>
+                        {ev.anio_ocurrencia_aprox && (
+                          <span className="text-[11px] text-slate-500">{ev.anio_ocurrencia_aprox}</span>
+                        )}
+                      </div>
+                      {ev.descripcion_evento && (
+                        <p className="text-[11px] text-slate-600 mt-1">{ev.descripcion_evento}</p>
+                      )}
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {ev.antecedente_clinico_externo && (
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 text-[10px] font-semibold border border-indigo-200">
+                            Antecedente externo
+                          </span>
+                        )}
+                        {ev.requiere_derivacion && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 text-[10px] font-semibold border border-rose-200">
+                            Requiere derivación
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </form>
       </ModalDialog>
 

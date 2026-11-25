@@ -258,13 +258,16 @@ GO
 -- ============================================================================
 
 CREATE TABLE dbo.eventos_indice (
-    id_evento_indice      BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    id_estudiante         BIGINT         NOT NULL,
-    id_categoria_evento   SMALLINT       NOT NULL,
-    codigo_evento_local   NVARCHAR(30)   NOT NULL,
-    anio_ocurrencia_aprox SMALLINT       NULL,
-    vigente               BIT            NOT NULL CONSTRAINT df_evt_vig DEFAULT (1),
-    creado_en             DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_evt_creado DEFAULT (SYSDATETIMEOFFSET()),
+    id_evento_indice            BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    id_estudiante               BIGINT         NOT NULL,
+    id_categoria_evento         SMALLINT       NOT NULL,
+    codigo_evento_local         NVARCHAR(30)   NOT NULL,
+    anio_ocurrencia_aprox       SMALLINT       NULL,
+    descripcion_evento          NVARCHAR(500)  NULL, -- Uso interno OLTP (excluido del Data Mart)
+    antecedente_clinico_externo BIT            NOT NULL CONSTRAINT df_evt_ant_ext DEFAULT (0),
+    requiere_derivacion         BIT            NOT NULL CONSTRAINT df_evt_deriv   DEFAULT (0),
+    vigente                     BIT            NOT NULL CONSTRAINT df_evt_vig DEFAULT (1),
+    creado_en                   DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_evt_creado DEFAULT (SYSDATETIMEOFFSET()),
 
     CONSTRAINT fk_evt_estudiante
         FOREIGN KEY (id_estudiante)

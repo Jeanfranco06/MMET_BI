@@ -149,7 +149,8 @@ BEGIN
                 src.requiere_evento_indice
             );
 
-        -- 2.5 DimEventoIndice (preserva fila -1 'No aplica' para PSS-10)
+        -- 2.5 DimEventoIndice (preserva fila -1 'No aplica' para PSS-10; minimización de datos:
+        --     NO copia descripcion_evento, antecedente_clinico_externo ni requiere_derivacion)
         MERGE dm.DimEventoIndice AS tgt
         USING (
             SELECT

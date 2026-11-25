@@ -3,6 +3,7 @@ import { DatabaseService } from '../database/database.service';
 import {
   CrearAsignacionDto,
   CrearEstudianteDto,
+  CrearEventoIndiceDto,
   CrearSesionDto,
   RegistrarAsistenciaDto,
   RegistrarResultadoDto,
@@ -164,7 +165,7 @@ export class OperacionService {
 
       return {
         ok: true,
-        mensaje: `Estudiante ${codigo} (${nombres} ${apellidos}) registrado correctamente en dbo.estudiantes.`,
+        mensaje: `Estudiante ${codigo} (${nombres} ${apellidos}) registrado correctamente.`,
         estudiante: inserted[0],
       };
     } catch (err: any) {
@@ -333,6 +334,160 @@ export class OperacionService {
         );
       }
       throw new BadRequestException(err?.message || 'Error al registrar la inscripción en SQL Server.');
+    }
+  }
+
+  async getCategoriasEvento() {
+    return this.db.query(
+      `
+      SELECT id_categoria_evento, codigo_categoria, nombre_categoria
+      FROM dbo.cat_categorias_evento_indice
+      WHERE activo = 1
+      ORDER BY id_categoria_evento
+      `,
+    );
+  }
+
+  async getEventosIndice(f: { idEstudiante?: number; codigoEstudiante?: string }) {
+    const rows = await this.db.query(
+      `
+      SELECT TOP 60
+        ev.id_evento_indice,
+        ev.id_estudiante,
+        e.codigo_estudiante,
+        e.nombres,
+        e.apellidos,
+        ev.id_categoria_evento,
+        c.codigo_categoria,
+        c.nombre_categoria,
+        ev.codigo_evento_local,
+        ev.anio_ocurrencia_aprox,
+        ev.descripcion_evento,
+        ev.antecedente_clinico_externo,
+        ev.requiere_derivacion,
+        ev.vigente,
+        ev.creado_en
+      FROM dbo.eventos_indice ev
+      JOIN dbo.estudiantes e ON e.id_estudiante = ev.id_estudiante
+      JOIN dbo.cat_categorias_evento_indice c ON c.id_categoria_evento = ev.id_categoria_evento
+      WHERE (@idEst IS NULL OR ev.id_estudiante = @idEst)
+        AND (@codEst IS NULL OR e.codigo_estudiante LIKE @codEst)
+      ORDER BY ev.creado_en DESC, ev.id_evento_indice DESC
+      `,
+      {
+        idEst: f.idEstudiante ?? null,
+        codEst: f.codigoEstudiante ? `%${f.codigoEstudiante}%` : null,
+      },
+    );
+
+    return rows.map((r) => ({
+      ...r,
+      id_evento_indice: Number(r.id_evento_indice),
+      id_estudiante: Number(r.id_estudiante),
+      id_categoria_evento: Number(r.id_categoria_evento),
+      anio_ocurrencia_aprox: r.anio_ocurrencia_aprox != null ? Number(r.anio_ocurrencia_aprox) : null,
+      antecedente_clinico_externo: Boolean(r.antecedente_clinico_externo),
+      requiere_derivacion: Boolean(r.requiere_derivacion),
+      vigente: Boolean(r.vigente),
+    }));
+  }
+
+  async crearEventoIndice(dto: CrearEventoIndiceDto) {
+    const [estRows, catRows, prevRows] = await Promise.all([
+      this.db.query<any>(
+        `SELECT id_estudiante, codigo_estudiante, nombres, apellidos FROM dbo.estudiantes WHERE id_estudiante = @id`,
+        { id: dto.id_estudiante },
+      ),
+      this.db.query<any>(
+        `SELECT id_categoria_evento, codigo_categoria, nombre_categoria FROM dbo.cat_categorias_evento_indice WHERE id_categoria_evento = @id AND activo = 1`,
+        { id: dto.id_categoria_evento },
+      ),
+      this.db.query<{ codigo_evento_local: string }>(
+        `SELECT codigo_evento_local FROM dbo.eventos_indice WHERE id_estudiante = @id`,
+        { id: dto.id_estudiante },
+      ),
+    ]);
+
+    if (!estRows.length) {
+      throw new NotFoundException(`No existe el estudiante con id ${dto.id_estudiante}.`);
+    }
+    if (!catRows.length) {
+      throw new BadRequestException(`No existe la categoría de evento índice activa con id ${dto.id_categoria_evento}.`);
+    }
+
+    // Genera un código local único por estudiante: EVT-01, EVT-02, ...
+    let maxNum = 0;
+    for (const row of prevRows) {
+      const m = /^EVT-(\d+)$/i.exec(String(row.codigo_evento_local || '').trim());
+      if (m) {
+        maxNum = Math.max(maxNum, Number(m[1]));
+      }
+    }
+    const nextNum = Math.max(maxNum + 1, prevRows.length + 1);
+    const codigoEventoLocal = `EVT-${String(nextNum).padStart(2, '0')}`;
+
+    const descripcion = dto.descripcion_evento?.trim() || '';
+    const anio = dto.anio_ocurrencia_aprox ?? 0;
+    const antExt = dto.antecedente_clinico_externo ? 1 : 0;
+    const reqDer = dto.requiere_derivacion ? 1 : 0;
+
+    try {
+      const inserted = await this.db.query<any>(
+        `
+        SET NOCOUNT ON;
+        DECLARE @nuevo TABLE (id_evento_indice BIGINT);
+        INSERT INTO dbo.eventos_indice (
+          id_estudiante, id_categoria_evento, codigo_evento_local,
+          anio_ocurrencia_aprox, descripcion_evento,
+          antecedente_clinico_externo, requiere_derivacion, vigente
+        )
+        OUTPUT INSERTED.id_evento_indice INTO @nuevo
+        VALUES (
+          @idEst, @idCat, @codigo,
+          NULLIF(@anio, 0), NULLIF(@desc, N''),
+          @antExt, @reqDer, 1
+        );
+
+        DECLARE @idNuevo BIGINT = (SELECT TOP 1 id_evento_indice FROM @nuevo);
+        SELECT
+          ev.id_evento_indice,
+          ev.id_estudiante,
+          e.codigo_estudiante,
+          e.nombres,
+          e.apellidos,
+          ev.id_categoria_evento,
+          c.codigo_categoria,
+          c.nombre_categoria,
+          ev.codigo_evento_local,
+          ev.anio_ocurrencia_aprox,
+          ev.descripcion_evento,
+          ev.antecedente_clinico_externo,
+          ev.requiere_derivacion,
+          ev.vigente,
+          ev.creado_en
+        FROM dbo.eventos_indice ev
+        JOIN dbo.estudiantes e ON e.id_estudiante = ev.id_estudiante
+        JOIN dbo.cat_categorias_evento_indice c ON c.id_categoria_evento = ev.id_categoria_evento
+        WHERE ev.id_evento_indice = @idNuevo;
+        `,
+        {
+          idEst: dto.id_estudiante,
+          idCat: dto.id_categoria_evento,
+          codigo: codigoEventoLocal,
+          anio,
+          desc: descripcion,
+          antExt,
+          reqDer,
+        },
+      );
+
+      return {
+        ok: true,
+        mensaje: `Evento índice ${codigoEventoLocal} (${catRows[0].nombre_categoria}) registrado para ${estRows[0].codigo_estudiante}.`,
+        evento: inserted[0],
+      };
+    } catch (err: any) {
+      throw new BadRequestException(err?.message || 'Error al registrar el evento índice en SQL Server.');
     }
   }
 
