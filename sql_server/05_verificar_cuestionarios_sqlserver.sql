@@ -23,11 +23,23 @@ IF NOT EXISTS(
  GROUP BY v.id_version_instrumento HAVING COUNT(DISTINCT i.id_item)=20 AND COUNT(DISTINCT o.valor)=5
 ) THROW 51101,N'La versión española PCL-5 debe tener 20 ítems y cinco opciones.',1;
 
-IF EXISTS(
+IF NOT EXISTS(
  SELECT 1 FROM dbo.instrumento_versiones v
  JOIN dbo.instrumento_items i ON i.id_version_instrumento=v.id_version_instrumento
- WHERE v.numero_version=N'PENDIENTE-AUTORIZACION' AND v.estado_contenido<>N'BLOQUEADO'
-) THROW 51102,N'El PSS-10 debe continuar bloqueado hasta documentar la autorización de contenido.',1;
+ JOIN dbo.instrumento_opciones_respuesta o ON o.id_version_instrumento=v.id_version_instrumento
+ WHERE v.numero_version=N'PSS10-ES-2026' AND v.estado_contenido=N'PUBLICADO'
+   AND i.texto_item IS NOT NULL
+ GROUP BY v.id_version_instrumento
+ HAVING COUNT(DISTINCT i.id_item)=10
+    AND COUNT(DISTINCT o.valor)=5
+    AND SUM(CASE WHEN i.puntuacion_inversa=1 AND i.numero_item IN (4,5,7,8) THEN 1 ELSE 0 END) / 5 = 4
+    AND SUM(CASE WHEN i.puntuacion_inversa=1 AND i.numero_item NOT IN (4,5,7,8) THEN 1 ELSE 0 END) = 0
+) THROW 51102,N'La versión española PSS-10 debe estar PUBLICADA con 10 ítems, 5 opciones (0-4) e inversión exacta en ítems 4, 5, 7 y 8.',1;
+
+IF OBJECT_ID(N'dbo.historial_asistencias', N'U') IS NULL
+ OR COL_LENGTH(N'dbo.asistencias', N'actualizado_en') IS NULL
+ OR OBJECT_ID(N'dbo.trg_auditar_asistencias', N'TR') IS NULL
+ THROW 51106,N'Falta la trazabilidad temporal de asistencias (actualizado_en, historial_asistencias o trg_auditar_asistencias).',1;
 
 IF EXISTS(
  SELECT 1 FROM dbo.respuestas_evaluacion re

@@ -32,6 +32,8 @@ coverage/
 Thumbs.db
 .vscode/
 .idea/
+~$*
+*.tmp
 
 # Local generated administrator credentials
 backend/.local-admin-credentials.txt

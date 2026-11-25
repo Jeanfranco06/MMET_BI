@@ -40,6 +40,7 @@ DROP TABLE IF EXISTS dbo.usuarios_sistema;
 DROP TABLE IF EXISTS dbo.instrumento_opciones_respuesta;
 DROP TABLE IF EXISTS dbo.instrumento_items;
 DROP TABLE IF EXISTS dbo.instrumento_versiones;
+DROP TABLE IF EXISTS dbo.historial_asistencias;
 DROP TABLE IF EXISTS dbo.historial_estados_asignacion;
 DROP TABLE IF EXISTS dbo.historial_estados_sesion;
 DROP TABLE IF EXISTS dbo.resultados_evaluacion;
@@ -227,6 +228,7 @@ CREATE TABLE dbo.asistencias (
     estado_asistencia   NVARCHAR(20)   NOT NULL,
     minutos_asistidos   SMALLINT       NULL,
     registrado_en       DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_asis_reg DEFAULT (SYSDATETIMEOFFSET()),
+    actualizado_en      DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_asis_act DEFAULT (SYSDATETIMEOFFSET()),
 
     CONSTRAINT fk_asis_asignacion
         FOREIGN KEY (id_programa, id_asignacion)
@@ -560,6 +562,37 @@ CREATE TABLE dbo.historial_estados_asignacion (
 );
 GO
 
+CREATE TABLE dbo.historial_asistencias (
+    id_historial_asistencia BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    id_asistencia           BIGINT         NULL,
+    id_programa             BIGINT         NOT NULL,
+    id_asignacion           BIGINT         NOT NULL,
+    id_sesion               BIGINT         NOT NULL,
+    tipo_operacion          NVARCHAR(10)   NOT NULL,
+    estado_anterior         NVARCHAR(20)   NULL,
+    estado_nuevo            NVARCHAR(20)   NULL,
+    minutos_anteriores      SMALLINT       NULL,
+    minutos_nuevos          SMALLINT       NULL,
+    fecha_registro_original DATETIMEOFFSET(0) NULL,
+    fecha_cambio            DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_hasis_fcambio DEFAULT (SYSDATETIMEOFFSET()),
+    usuario_db              NVARCHAR(128)  NOT NULL CONSTRAINT df_hasis_usr DEFAULT (ORIGINAL_LOGIN()),
+
+    CONSTRAINT fk_hasis_asignacion
+        FOREIGN KEY (id_programa, id_asignacion)
+        REFERENCES dbo.asignaciones (id_programa, id_asignacion),
+    CONSTRAINT fk_hasis_sesion
+        FOREIGN KEY (id_programa, id_sesion)
+        REFERENCES dbo.sesiones (id_programa, id_sesion),
+    CONSTRAINT chk_hasis_operacion CHECK (tipo_operacion IN (N'INSERT', N'UPDATE', N'DELETE')),
+    CONSTRAINT chk_hasis_est_ant CHECK (
+        estado_anterior IS NULL OR estado_anterior IN (N'ASISTIO', N'INASISTENCIA', N'RETIRO_BAJA')
+    ),
+    CONSTRAINT chk_hasis_est_nvo CHECK (
+        estado_nuevo IS NULL OR estado_nuevo IN (N'ASISTIO', N'INASISTENCIA', N'RETIRO_BAJA')
+    )
+);
+GO
+
 -- ============================================================================
 -- 5. VARIABLES COMPLEMENTARIAS OPCIONALES (RQ-BI-12, AISLADAS DEL NÚCLEO)
 -- ============================================================================
@@ -647,6 +680,80 @@ BEGIN
 END;
 GO
 
+CREATE OR ALTER TRIGGER dbo.trg_auditar_asistencias
+ON dbo.asistencias
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF TRIGGER_NESTLEVEL() > 1
+        RETURN;
+
+    DECLARE @ahora DATETIMEOFFSET(0) = SYSDATETIMEOFFSET();
+
+    -- En UPDATE, conserva registrado_en original y actualiza actualizado_en
+    IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
+    BEGIN
+        UPDATE a
+           SET a.registrado_en  = d.registrado_en,
+               a.actualizado_en = @ahora
+          FROM dbo.asistencias a
+          JOIN deleted d ON d.id_asistencia = a.id_asistencia;
+
+        INSERT INTO dbo.historial_asistencias (
+            id_asistencia, id_programa, id_asignacion, id_sesion,
+            tipo_operacion, estado_anterior, estado_nuevo,
+            minutos_anteriores, minutos_nuevos,
+            fecha_registro_original, fecha_cambio
+        )
+        SELECT
+            i.id_asistencia, i.id_programa, i.id_asignacion, i.id_sesion,
+            N'UPDATE', d.estado_asistencia, i.estado_asistencia,
+            d.minutos_asistidos, i.minutos_asistidos,
+            d.registrado_en, @ahora
+          FROM inserted i
+          JOIN deleted d ON d.id_asistencia = i.id_asistencia;
+        RETURN;
+    END
+
+    -- En INSERT, registra la creación inicial en historial
+    IF EXISTS (SELECT 1 FROM inserted)
+    BEGIN
+        INSERT INTO dbo.historial_asistencias (
+            id_asistencia, id_programa, id_asignacion, id_sesion,
+            tipo_operacion, estado_anterior, estado_nuevo,
+            minutos_anteriores, minutos_nuevos,
+            fecha_registro_original, fecha_cambio
+        )
+        SELECT
+            i.id_asistencia, i.id_programa, i.id_asignacion, i.id_sesion,
+            N'INSERT', NULL, i.estado_asistencia,
+            NULL, i.minutos_asistidos,
+            i.registrado_en, i.registrado_en
+          FROM inserted i;
+        RETURN;
+    END
+
+    -- En DELETE, conserva el último estado conocido
+    IF EXISTS (SELECT 1 FROM deleted)
+    BEGIN
+        INSERT INTO dbo.historial_asistencias (
+            id_asistencia, id_programa, id_asignacion, id_sesion,
+            tipo_operacion, estado_anterior, estado_nuevo,
+            minutos_anteriores, minutos_nuevos,
+            fecha_registro_original, fecha_cambio
+        )
+        SELECT
+            d.id_asistencia, d.id_programa, d.id_asignacion, d.id_sesion,
+            N'DELETE', d.estado_asistencia, NULL,
+            d.minutos_asistidos, NULL,
+            d.registrado_en, @ahora
+          FROM deleted d;
+    END
+END;
+GO
+
 CREATE OR ALTER TRIGGER dbo.trg_validar_resultado_oportunidad
 ON dbo.resultados_evaluacion
 AFTER INSERT, UPDATE
@@ -696,6 +803,9 @@ CREATE INDEX ix_asignaciones_prog_estado_retiro
 
 CREATE INDEX ix_asistencias_asig_estado
     ON dbo.asistencias (id_asignacion, estado_asistencia, id_sesion);
+
+CREATE INDEX ix_hasis_asig_sesion_fecha
+    ON dbo.historial_asistencias (id_asignacion, id_sesion, fecha_cambio);
 
 CREATE INDEX ix_op_eval_corte_kpi04
     ON dbo.oportunidades_evaluacion (id_programa, aplicable, fecha_ventana_inicio, fecha_ventana_fin);

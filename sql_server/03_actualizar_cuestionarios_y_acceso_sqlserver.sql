@@ -151,4 +151,131 @@ BEGIN
   THROW 50022,N'No se pueden agregar o modificar opciones de una versión publicada.',1;
 END;
 GO
-PRINT N'Actualización no destructiva de cuestionarios y acceso aplicada.';
+
+-- Trazabilidad temporal de asistencias (evita sobrescritura sin historial)
+IF COL_LENGTH(N'dbo.asistencias', N'actualizado_en') IS NULL
+BEGIN
+ ALTER TABLE dbo.asistencias
+  ADD actualizado_en DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_asis_act DEFAULT (SYSDATETIMEOFFSET());
+ EXEC sp_executesql N'UPDATE dbo.asistencias SET actualizado_en = registrado_en;';
+END;
+GO
+
+IF OBJECT_ID(N'dbo.historial_asistencias', N'U') IS NULL
+BEGIN
+ CREATE TABLE dbo.historial_asistencias (
+  id_historial_asistencia BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+  id_asistencia           BIGINT         NULL,
+  id_programa             BIGINT         NOT NULL,
+  id_asignacion           BIGINT         NOT NULL,
+  id_sesion               BIGINT         NOT NULL,
+  tipo_operacion          NVARCHAR(10)   NOT NULL,
+  estado_anterior         NVARCHAR(20)   NULL,
+  estado_nuevo            NVARCHAR(20)   NULL,
+  minutos_anteriores      SMALLINT       NULL,
+  minutos_nuevos          SMALLINT       NULL,
+  fecha_registro_original DATETIMEOFFSET(0) NULL,
+  fecha_cambio            DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_hasis_fcambio DEFAULT (SYSDATETIMEOFFSET()),
+  usuario_db              NVARCHAR(128)  NOT NULL CONSTRAINT df_hasis_usr DEFAULT (ORIGINAL_LOGIN()),
+  CONSTRAINT fk_hasis_asignacion FOREIGN KEY (id_programa, id_asignacion)
+   REFERENCES dbo.asignaciones (id_programa, id_asignacion),
+  CONSTRAINT fk_hasis_sesion FOREIGN KEY (id_programa, id_sesion)
+   REFERENCES dbo.sesiones (id_programa, id_sesion),
+  CONSTRAINT chk_hasis_operacion CHECK (tipo_operacion IN (N'INSERT', N'UPDATE', N'DELETE')),
+  CONSTRAINT chk_hasis_est_ant CHECK (estado_anterior IS NULL OR estado_anterior IN (N'ASISTIO', N'INASISTENCIA', N'RETIRO_BAJA')),
+  CONSTRAINT chk_hasis_est_nvo CHECK (estado_nuevo IS NULL OR estado_nuevo IN (N'ASISTIO', N'INASISTENCIA', N'RETIRO_BAJA'))
+ );
+ CREATE INDEX ix_hasis_asig_sesion_fecha
+  ON dbo.historial_asistencias (id_asignacion, id_sesion, fecha_cambio);
+END;
+GO
+
+-- Poblar línea base histórica para asistencias existentes si aún no tienen evento inicial
+IF NOT EXISTS (SELECT 1 FROM dbo.historial_asistencias)
+BEGIN
+ INSERT INTO dbo.historial_asistencias (
+  id_asistencia, id_programa, id_asignacion, id_sesion,
+  tipo_operacion, estado_anterior, estado_nuevo,
+  minutos_anteriores, minutos_nuevos,
+  fecha_registro_original, fecha_cambio
+ )
+ SELECT
+  a.id_asistencia, a.id_programa, a.id_asignacion, a.id_sesion,
+  N'INSERT', NULL, a.estado_asistencia,
+  NULL, a.minutos_asistidos,
+  a.registrado_en, a.registrado_en
+ FROM dbo.asistencias a;
+END;
+GO
+
+CREATE OR ALTER TRIGGER dbo.trg_auditar_asistencias
+ON dbo.asistencias
+AFTER INSERT, UPDATE, DELETE
+AS
+BEGIN
+ SET NOCOUNT ON;
+
+ IF TRIGGER_NESTLEVEL() > 1
+  RETURN;
+
+ DECLARE @ahora DATETIMEOFFSET(0) = SYSDATETIMEOFFSET();
+
+ IF EXISTS (SELECT 1 FROM inserted) AND EXISTS (SELECT 1 FROM deleted)
+ BEGIN
+  UPDATE a
+     SET a.registrado_en  = d.registrado_en,
+         a.actualizado_en = @ahora
+    FROM dbo.asistencias a
+    JOIN deleted d ON d.id_asistencia = a.id_asistencia;
+
+  INSERT INTO dbo.historial_asistencias (
+   id_asistencia, id_programa, id_asignacion, id_sesion,
+   tipo_operacion, estado_anterior, estado_nuevo,
+   minutos_anteriores, minutos_nuevos,
+   fecha_registro_original, fecha_cambio
+  )
+  SELECT
+   i.id_asistencia, i.id_programa, i.id_asignacion, i.id_sesion,
+   N'UPDATE', d.estado_asistencia, i.estado_asistencia,
+   d.minutos_asistidos, i.minutos_asistidos,
+   d.registrado_en, @ahora
+  FROM inserted i
+  JOIN deleted d ON d.id_asistencia = i.id_asistencia;
+  RETURN;
+ END
+
+ IF EXISTS (SELECT 1 FROM inserted)
+ BEGIN
+  INSERT INTO dbo.historial_asistencias (
+   id_asistencia, id_programa, id_asignacion, id_sesion,
+   tipo_operacion, estado_anterior, estado_nuevo,
+   minutos_anteriores, minutos_nuevos,
+   fecha_registro_original, fecha_cambio
+  )
+  SELECT
+   i.id_asistencia, i.id_programa, i.id_asignacion, i.id_sesion,
+   N'INSERT', NULL, i.estado_asistencia,
+   NULL, i.minutos_asistidos,
+   i.registrado_en, i.registrado_en
+  FROM inserted i;
+  RETURN;
+ END
+
+ IF EXISTS (SELECT 1 FROM deleted)
+ BEGIN
+  INSERT INTO dbo.historial_asistencias (
+   id_asistencia, id_programa, id_asignacion, id_sesion,
+   tipo_operacion, estado_anterior, estado_nuevo,
+   minutos_anteriores, minutos_nuevos,
+   fecha_registro_original, fecha_cambio
+  )
+  SELECT
+   d.id_asistencia, d.id_programa, d.id_asignacion, d.id_sesion,
+   N'DELETE', d.estado_asistencia, NULL,
+   d.minutos_asistidos, NULL,
+   d.registrado_en, @ahora
+  FROM deleted d;
+ END
+END;
+GO
+PRINT N'Actualización no destructiva de cuestionarios, acceso y trazabilidad de asistencias aplicada.';
