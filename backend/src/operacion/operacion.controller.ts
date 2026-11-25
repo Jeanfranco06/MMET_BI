@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
 import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { OperacionService } from './operacion.service';
+import { Roles } from '../auth/auth.guard';
 
 export class RegistrarAsistenciaDto {
   @IsInt()
@@ -41,22 +42,26 @@ export class OperacionController {
   constructor(private readonly operacionService: OperacionService) {}
 
   @Get('sesiones')
+  @Roles('ADMIN', 'COORDINACION', 'EVALUACION')
   getSesiones(@Query('id_programa') idPrograma?: string) {
     return this.operacionService.getSesiones(idPrograma ? Number(idPrograma) : undefined);
   }
 
   @Get('oportunidades-abiertas')
+  @Roles('ADMIN', 'EVALUACION')
   getOportunidadesAbiertas(@Query('id_programa') idPrograma?: string) {
     return this.operacionService.getOportunidadesAbiertas(idPrograma ? Number(idPrograma) : undefined);
   }
 
   @Post('asistencias')
+  @Roles('ADMIN', 'COORDINACION')
   registrarAsistencia(@Body() dto: RegistrarAsistenciaDto) {
     return this.operacionService.registrarAsistencia(dto);
   }
 
   @Post('resultados')
-  registrarResultado(@Body() dto: RegistrarResultadoDto) {
-    return this.operacionService.registrarResultado(dto);
+  @Roles('ADMIN', 'EVALUACION')
+  registrarResultado() {
+    throw new ForbiddenException('El registro por puntaje total está deshabilitado. Use el envío de respuestas completas del estudiante.');
   }
 }
