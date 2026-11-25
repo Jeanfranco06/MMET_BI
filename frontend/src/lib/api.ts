@@ -138,6 +138,45 @@ export interface ResumenResponse {
   };
 }
 
+export interface ImpactoPracticaRow {
+  id_practica?: number;
+  id_programa?: number;
+  codigo_programa?: string;
+  nombre_programa?: string;
+  codigo_practica: string;
+  nombre_practica: string;
+  tipo_practica?: string;
+  es_mixto?: boolean;
+  estado_programa?: string;
+  pares_validos: number;
+  suprimido: boolean;
+  promedio_inicial: number | null;
+  promedio_final: number | null;
+  reduccion_promedio: number | null;
+  disminuyeron: number | null;
+  sin_cambio: number | null;
+  aumentaron: number | null;
+  meta_operativa_pts: number;
+  cumple_meta: boolean | null;
+  semaforo: SemaforoEstado;
+}
+
+export interface ImpactoPracticasResponse {
+  instrumento: 'PSS-10' | 'PCL-5';
+  corte: string;
+  facultad: string;
+  meta_operativa_pts: number;
+  kpi05_meta_practicas: {
+    practicas_evaluables: number;
+    practicas_cumplen_meta: number;
+    tasa_cumplimiento_meta: number | null;
+    meta_operativa: string;
+    semaforo: SemaforoEstado;
+  };
+  por_practica: ImpactoPracticaRow[];
+  por_programa: ImpactoPracticaRow[];
+}
+
 export const api = {
   login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
   logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
@@ -171,7 +210,7 @@ export const api = {
     corte: string;
     semestre?: string;
     facultad?: string;
-  }) => apiGet<any>('/analytics/impacto-practicas', params),
+  }) => apiGet<ImpactoPracticasResponse>('/analytics/impacto-practicas', params),
   getContinuidad: (params: {
     corte: string;
     semestre?: string;

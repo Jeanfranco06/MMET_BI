@@ -14,7 +14,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { api, type FiltrosResponse } from '@/lib/api';
+import { api, type FiltrosResponse, type ImpactoPracticasResponse, type ImpactoPracticaRow } from '@/lib/api';
 import { AiReportButton } from './AiReportButton';
 import { KpiCard } from './KpiCard';
 import { EChartBox } from './EChartBox';
@@ -39,7 +39,8 @@ function formatFechaEs(iso: string | null | undefined): string {
   return `${d}/${m}/${y}`;
 }
 
-function compactPrograma(codigo: string): string {
+function compactPrograma(codigo?: string): string {
+  if (!codigo) return '—';
   const match = codigo.match(/(P-\d{2}|MIXTO)-(C\d{2})$/);
   if (match) return `${match[1]} · ${match[2]}`;
   return codigo;
@@ -82,7 +83,7 @@ export function EfectividadPracticaReport({
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
-  const [data, setData] = useState<any | null>(null);
+  const [data, setData] = useState<ImpactoPracticasResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,7 +126,7 @@ export function EfectividadPracticaReport({
   const kpi05 = data?.kpi05_meta_practicas;
   const metaPts = data?.meta_operativa_pts ?? (instrumento === 'PSS-10' ? 4 : 10);
 
-  const filasRaw: any[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
+  const filasRaw: ImpactoPracticaRow[] = vista === 'practica' ? data?.por_practica || [] : data?.por_programa || [];
   const filas = useMemo(() => {
     return [...filasRaw].sort((a, b) => {
       const av = a.suprimido ? -9999 : Number(a.reduccion_promedio ?? -999);
@@ -135,7 +136,10 @@ export function EfectividadPracticaReport({
   }, [filasRaw, sortDir]);
 
   const totalParesFilas = filas.reduce((acc, r) => acc + Number(r.pares_validos || 0), 0);
-  const evaluablesFilas = filas.filter((r) => !r.suprimido && r.reduccion_promedio != null);
+  const evaluablesFilas = filas.filter(
+    (r): r is ImpactoPracticaRow & { reduccion_promedio: number } =>
+      !r.suprimido && r.reduccion_promedio != null,
+  );
   const mejorPractica = evaluablesFilas.length
     ? [...evaluablesFilas].sort((a, b) => Number(b.reduccion_promedio) - Number(a.reduccion_promedio))[0]
     : null;
@@ -228,7 +232,7 @@ export function EfectividadPracticaReport({
           type: 'bar',
           barMaxWidth: 26,
           itemStyle: { borderRadius: [6, 6, 0, 0], color: barGradient('#94A3B8', '#64748B') },
-          data: items.map((r) => Number(r.promedio_inicial.toFixed(2))),
+          data: items.map((r) => Number((r.promedio_inicial ?? 0).toFixed(2))),
         },
         {
           name: 'Prom. Final',
@@ -241,7 +245,7 @@ export function EfectividadPracticaReport({
                 ? barGradient('#14B8A6', '#0D9488')
                 : barGradient('#38BDF8', '#0284C7'),
           },
-          data: items.map((r) => Number(r.promedio_final.toFixed(2))),
+          data: items.map((r) => Number((r.promedio_final ?? 0).toFixed(2))),
         },
       ],
     };
@@ -449,7 +453,7 @@ export function EfectividadPracticaReport({
             code="MEJOR DESEMPEÑO"
             title={vista === 'practica' ? 'Práctica líder en reducción' : 'Cohorte líder en reducción'}
             value={
-              mejorPractica
+              mejorPractica && mejorPractica.reduccion_promedio != null
                 ? `+${Number(mejorPractica.reduccion_promedio).toFixed(2)}`
                 : 'n < 5'
             }

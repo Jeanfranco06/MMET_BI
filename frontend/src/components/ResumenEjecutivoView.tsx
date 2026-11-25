@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { api, type FiltrosResponse, type ResumenResponse } from '@/lib/api';
+import { api, type FiltrosResponse, type ResumenResponse, type ImpactoPracticasResponse, type ImpactoPracticaRow } from '@/lib/api';
 import { KpiCard } from './KpiCard';
 import { EChartBox } from './EChartBox';
 import { ChartSkeleton, KpiGridSkeleton } from './UiStates';
@@ -46,8 +46,8 @@ export function ResumenEjecutivoView({
   onNavigate,
 }: ResumenEjecutivoViewProps) {
   const [resumen, setResumen] = useState<ResumenResponse | null>(null);
-  const [impactoPss, setImpactoPss] = useState<any | null>(null);
-  const [impactoPcl, setImpactoPcl] = useState<any | null>(null);
+  const [impactoPss, setImpactoPss] = useState<ImpactoPracticasResponse | null>(null);
+  const [impactoPcl, setImpactoPcl] = useState<ImpactoPracticasResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +99,7 @@ export function ResumenEjecutivoView({
   const kpi05Pcl = impactoPcl?.kpi05_meta_practicas;
 
   const chartPracticasPss = useMemo(() => {
-    const rows = (impactoPss?.por_practica || []).filter((r: any) => !r.suprimido && r.reduccion_promedio != null);
+    const rows = (impactoPss?.por_practica || []).filter((r: ImpactoPracticaRow) => !r.suprimido && r.reduccion_promedio != null);
     return {
       grid: { left: 16, right: 20, top: 28, bottom: 26, containLabel: true },
       tooltip: {
