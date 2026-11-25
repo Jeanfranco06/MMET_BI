@@ -18,21 +18,55 @@ import { ResponsiveTable, type TableColumn } from './ResponsiveTable';
 import { ModalDialog } from './ModalDialog';
 import { TableSkeleton } from './UiStates';
 
+export type OpTab = 'asistencias' | 'sesiones' | 'correcciones' | 'etl';
+
 interface OperacionViewProps {
+  activeTab: OpTab;
   filtros: FiltrosResponse | null;
   userRole: string;
   onDataMutated: () => void;
 }
 
-type OpTab = 'asistencias' | 'sesiones' | 'correcciones' | 'etl';
+const TAB_HEADER_META: Record<
+  OpTab,
+  {
+    layer: 'OLTP' | 'ETL';
+    layerBadge: string;
+    title: string;
+    description: string;
+  }
+> = {
+  asistencias: {
+    layer: 'OLTP',
+    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    title: 'Registro de Asistencias',
+    description: 'Captura y actualización auditada de asistencia estudiantil por sesión en dbo.asistencias.',
+  },
+  sesiones: {
+    layer: 'OLTP',
+    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    title: 'Programación y Control de Sesiones',
+    description: 'Calendario operativo de sesiones, modalidad y práctica técnica registrada en dbo.sesiones.',
+  },
+  correcciones: {
+    layer: 'OLTP',
+    layerBadge: 'Capa Transaccional · OLTP (dbo.*)',
+    title: 'Corrección Versionada de Evaluaciones',
+    description: 'Gestión de nuevas versiones con motivo de auditoría en dbo.resultados_evaluacion.',
+  },
+  etl: {
+    layer: 'ETL',
+    layerBadge: 'Capa Analítica · ETL hacia Data Mart (dm.*)',
+    title: 'Control ETL & Calidad del Data Mart',
+    description: 'Ejecución idempotente de dm.usp_ejecutar_etl, métricas de carga y monitoreo de incidencias en dm.*.',
+  },
+};
 
-export function OperacionView({ filtros, userRole, onDataMutated }: OperacionViewProps) {
+export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: OperacionViewProps) {
   const canManageSessions = userRole === 'ADMIN' || userRole === 'COORDINACION';
   const canCorrectEval = userRole === 'ADMIN' || userRole === 'EVALUACION';
   const isAdmin = userRole === 'ADMIN';
 
-  const defaultTab: OpTab = canManageSessions ? 'asistencias' : canCorrectEval ? 'correcciones' : 'sesiones';
-  const [activeTab, setActiveTab] = useState<OpTab>(defaultTab);
   const [idPrograma, setIdPrograma] = useState<string>('');
   const [sesiones, setSesiones] = useState<any[]>([]);
   const [oportunidades, setOportunidades] = useState<any[]>([]);
@@ -292,14 +326,8 @@ export function OperacionView({ filtros, userRole, onDataMutated }: OperacionVie
   ];
 
   const sesionesRealizadas = sesiones.filter((s) => s.estado_sesion === 'REALIZADA');
-
-  const allTabs: Array<{ id: OpTab; label: string; Icon: typeof UserCheck; visible: boolean }> = [
-    { id: 'asistencias', label: 'Asistencias', Icon: UserCheck, visible: canManageSessions },
-    { id: 'sesiones', label: 'Sesiones', Icon: Calendar, visible: true },
-    { id: 'correcciones', label: 'Correcciones', Icon: ClipboardCheck, visible: canCorrectEval },
-    { id: 'etl', label: 'Control ETL', Icon: DatabaseZap, visible: isAdmin },
-  ];
-  const tabs = allTabs.filter((t) => t.visible);
+  const headerMeta = TAB_HEADER_META[activeTab];
+  const isEtlLayer = headerMeta.layer === 'ETL';
 
   return (
     <div className="space-y-5">
@@ -331,79 +359,68 @@ export function OperacionView({ filtros, userRole, onDataMutated }: OperacionVie
       )}
 
       {/* Header & Program Filter */}
-      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card space-y-4">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="font-display text-lg font-bold text-slate-900">
-              Operación Transaccional OLTP &amp; Control ETL
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Captura auditada en <code>dbo.*</code> y sincronización idempotente hacia el Data Mart <code>dm.*</code>.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <select
-              aria-label="Filtrar por programa"
-              value={idPrograma}
-              onChange={(e) => setIdPrograma(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"
-            >
-              <option value="">Todos los programas</option>
-              {filtros?.programas.map((p) => (
-                <option key={p.id_programa} value={p.id_programa}>
-                  {p.codigo_programa} ({p.codigo_practica})
-                </option>
-              ))}
-            </select>
-
-            {canManageSessions && (
-              <button
-                type="button"
-                onClick={() => {
-                  setNsProgramaId(idPrograma || String(filtros?.programas[0]?.id_programa || ''));
-                  setNsPracticaId(String(practicasUnicomponente[0]?.id_practica || ''));
-                  setSesionModalOpen(true);
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition-colors"
-              >
-                <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
-                Programar sesión
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={cargar}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
-              Actualizar
-            </button>
-          </div>
-        </div>
-
-        {/* Clean Internal Tabs */}
-        <div role="tablist" aria-label="Secciones de operación" className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-3">
-          {tabs.map(({ id, label, Icon }) => {
-            const active = activeTab === id;
-            return (
-              <button
-                key={id}
-                role="tab"
-                type="button"
-                aria-selected={active}
-                onClick={() => setActiveTab(id)}
-                className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all ${
-                  active
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[11px] font-bold tracking-wider uppercase border ${
+                  isEtlLayer
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                    : 'bg-teal-50 text-teal-800 border-teal-200'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{label}</span>
+                {headerMeta.layerBadge}
+              </span>
+            </div>
+            <h2 className="font-display text-lg font-bold text-slate-900">
+              {headerMeta.title}
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {headerMeta.description}
+            </p>
+          </div>
+          {!isEtlLayer && (
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                aria-label="Filtrar por programa"
+                value={idPrograma}
+                onChange={(e) => setIdPrograma(e.target.value)}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700"
+              >
+                <option value="">Todos los programas</option>
+                {filtros?.programas.map((p) => (
+                  <option key={p.id_programa} value={p.id_programa}>
+                    {p.codigo_programa} ({p.codigo_practica})
+                  </option>
+                ))}
+              </select>
+
+              {canManageSessions && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNsProgramaId(idPrograma || String(filtros?.programas[0]?.id_programa || ''));
+                    setNsPracticaId(String(practicasUnicomponente[0]?.id_practica || ''));
+                    setSesionModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition-colors"
+                >
+                  <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                  Programar sesión
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={cargar}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+                Actualizar
               </button>
-            );
-          })}
+            </div>
+          )}
         </div>
       </section>
 

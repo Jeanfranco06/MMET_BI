@@ -25,7 +25,7 @@ import {
   metaMarkLine,
 } from '@/lib/chartTheme';
 
-type NavTarget = 'evolucion' | 'practicas' | 'continuidad' | 'cumplimiento' | 'operacion';
+type NavTarget = 'evolucion' | 'practicas' | 'continuidad' | 'cumplimiento';
 
 interface ResumenEjecutivoViewProps {
   filtros: FiltrosResponse | null;

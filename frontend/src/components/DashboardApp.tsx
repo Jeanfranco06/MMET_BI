@@ -8,7 +8,8 @@ import {
   Calendar,
   ChevronRight,
   ClipboardCheck,
-  Database,
+  DatabaseZap,
+  Edit3,
   Filter,
   LayoutDashboard,
   LogOut,
@@ -16,6 +17,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  UserCheck,
   UserPlus,
   Users,
   X,
@@ -29,7 +31,7 @@ import { EvolucionReport } from './EvolucionReport';
 import { EfectividadPracticaReport } from './EfectividadPracticaReport';
 import { ContinuidadReport } from './ContinuidadReport';
 import { CumplimientoReport } from './CumplimientoReport';
-import { OperacionView } from './OperacionView';
+import { OperacionView, type OpTab } from './OperacionView';
 import { StudentEvaluations } from './StudentEvaluations';
 import { AdminStudentAccounts } from './AdminStudentAccounts';
 
@@ -40,7 +42,10 @@ type SeccionId =
   | 'practicas'
   | 'continuidad'
   | 'cumplimiento'
-  | 'operacion'
+  | 'oltp-asistencias'
+  | 'oltp-sesiones'
+  | 'oltp-correcciones'
+  | 'etl-control'
   | 'usuarios';
 
 interface NavItem {
@@ -50,7 +55,7 @@ interface NavItem {
   subtitle: string;
   section: string;
   Icon: typeof Activity;
-  adminOnly?: boolean;
+  allowedRoles?: string[];
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -103,23 +108,58 @@ const NAV_ITEMS: NavItem[] = [
     Icon: ClipboardCheck,
   },
   {
-    id: 'operacion',
-    label: 'Operación OLTP & ETL',
-    shortLabel: 'Operación & ETL',
-    subtitle: 'Captura y Data Mart',
-    section: 'Operación & Data Mart',
-    Icon: Database,
+    id: 'oltp-asistencias',
+    label: 'Asistencias',
+    shortLabel: 'Asistencias',
+    subtitle: 'Registro en dbo.asistencias',
+    section: 'Operación Transaccional (OLTP)',
+    Icon: UserCheck,
+    allowedRoles: ['ADMIN', 'COORDINACION'],
+  },
+  {
+    id: 'oltp-sesiones',
+    label: 'Sesiones',
+    shortLabel: 'Sesiones',
+    subtitle: 'Programación dbo.sesiones',
+    section: 'Operación Transaccional (OLTP)',
+    Icon: Calendar,
+    allowedRoles: ['ADMIN', 'COORDINACION', 'EVALUACION'],
+  },
+  {
+    id: 'oltp-correcciones',
+    label: 'Correcciones',
+    shortLabel: 'Correcciones',
+    subtitle: 'Versiones dbo.resultados',
+    section: 'Operación Transaccional (OLTP)',
+    Icon: Edit3,
+    allowedRoles: ['ADMIN', 'EVALUACION'],
+  },
+  {
+    id: 'etl-control',
+    label: 'Control ETL & Calidad',
+    shortLabel: 'Control ETL',
+    subtitle: 'Carga a dm.* e incidencias',
+    section: 'Gobierno de Datos & ETL',
+    Icon: DatabaseZap,
+    allowedRoles: ['ADMIN'],
   },
   {
     id: 'usuarios',
     label: 'Cuentas Estudiantiles',
     shortLabel: 'Cuentas',
     subtitle: 'Acceso PSS-10 / PCL-5',
-    section: 'Administración',
+    section: 'Gobierno de Datos & ETL',
     Icon: UserPlus,
-    adminOnly: true,
+    allowedRoles: ['ADMIN'],
   },
 ];
+
+const SECCION_TO_OP_TAB: Partial<Record<SeccionId, OpTab>> = {
+  'oltp-asistencias': 'asistencias',
+  'oltp-sesiones': 'sesiones',
+  'oltp-correcciones': 'correcciones',
+  'etl-control': 'etl',
+};
 
 function getInitials(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9]/g, ' ').trim();
@@ -261,7 +301,9 @@ export function DashboardApp() {
     return <StudentEvaluations username={currentUser.nombre_usuario} onLogout={handleLogout} />;
   }
 
-  const visibleNavItems = NAV_ITEMS.filter((item) => !item.adminOnly || currentUser?.rol === 'ADMIN');
+  const visibleNavItems = NAV_ITEMS.filter(
+    (item) => !item.allowedRoles || item.allowedRoles.includes(currentUser?.rol || ''),
+  );
   const groupedSections = Array.from(new Set(visibleNavItems.map((i) => i.section)));
   const activeNav = visibleNavItems.find((n) => n.id === seccion) || visibleNavItems[0];
 
@@ -649,8 +691,9 @@ export function DashboardApp() {
             />
           )}
 
-          {seccion === 'operacion' && (
+          {SECCION_TO_OP_TAB[seccion] && (
             <OperacionView
+              activeTab={SECCION_TO_OP_TAB[seccion]!}
               filtros={filtros}
               userRole={currentUser?.rol || ''}
               onDataMutated={handleDataMutated}
