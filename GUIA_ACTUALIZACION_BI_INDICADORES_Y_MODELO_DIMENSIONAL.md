@@ -1,6 +1,10 @@
 # GUÍA DE CONTINUIDAD TÉCNICA Y METODOLÓGICA DE INTELIGENCIA DE NEGOCIOS (BI)
 ## MMET_BI — Universidad Nacional de Trujillo (Periodo 2026-II)
 
+> **Continuidad de implementación:** consultar [Fase 0 Reglas y contratos](FASE_0_REGLAS_Y_CONTRATOS.md), que incorpora la captura obligatoria de cuestionarios completos y registra decisiones pendientes. Esta guía conserva antecedentes metodológicos; los conflictos se resolverán conforme a las decisiones expresas del usuario y a la especificación confirmada de fase 0.
+
+> **Decisiones D01 a D03 confirmadas:** elegibilidad KPI-04 desde fecha prevista de cumplimiento, con avance previo separado en RO-02; retiro antes de tres exigibles visible en RO-01 como Retirado y Evaluable: No, fuera de ambos conteos KPI-03; históricos con información conocida al cierre y revisiones posteriores explícitas, identificadas y auditables. Estas reglas prevalecen sobre cualquier definición anterior de elegibilidad o reconstrucción temporal de esta guía.
+
 > **Propósito de este documento:**  
 > Servir como especificación directiva para que el equipo o agente continúe la actualización formal de la documentación académica/técnica (incluyendo el documento base Word/PDF) a partir de la definición de los **indicadores de gestión (KPIs)** y culmine con el **Análisis Dimensional Inicial** (identificación a partir de documentos fuente, marcas rojas/amarillas, matriz bus de hechos y dimensiones, y diseño lógico de tablas de hechos y dimensiones).
 

@@ -1,5 +1,19 @@
 # MMET BI — Sistema de Inteligencia de Negocios y Gestión OLTP (2026-II)
 
+> **Reglas del sistema:** [Fase 0 Reglas y contratos](FASE_0_REGLAS_Y_CONTRATOS.md). Documenta las reglas confirmadas para los KPI, reportes, cuestionarios y cortes históricos. Las secciones históricas de este README se mantienen por contexto; para el comportamiento actual de captura, consulte la sección de fases implementadas abajo.
+
+> **Reglas confirmadas D01 a D03:** KPI-04 cuenta desde la fecha prevista de cumplimiento; RO-02 muestra el avance previo por separado. El retiro antes de tres sesiones se muestra en RO-01 como Retirado y Evaluable: No, excluido de KPI-03. Las correcciones de respuestas de cuestionario crean versiones y conservan su historial. La aplicación integral de los cortes y revisiones D03 en reportes y ETL aún está pendiente.
+
+### Estado de implementación (fases 1 a 3)
+
+El detalle de alcance ejecutado, pendientes, scripts y verificaciones está en [Implementación de fases 1 a 3](FASES_1_A_3_IMPLEMENTACION.md).
+
+- El OLTP contiene tablas versionadas para formularios, ítems, opciones, borradores, respuestas por ítem, cuentas y sesiones autenticadas. El script incremental conserva los datos existentes.
+- PCL-5 español estándar VA/NCPTSD versión 29-08-2023: publicado, 20 ítems, cinco opciones, puntuación total automática y corrección versionada. La fuente señala que esta traducción no ha sido validada en investigación publicada.
+- PSS-10 español: su esquema de 10 ítems y regla de inversión están definidos, pero la versión permanece bloqueada hasta documentar autorización de la traducción. No se aceptan puntajes manuales para reemplazar el formulario.
+- Las evaluaciones históricas que solo contienen totales permanecen intactas y sin respuestas reconstruidas. No se vincula una versión de formulario a esos resultados.
+- La gestión completa de catálogos/programas/sesiones y la adaptación de todos los reportes a D01–D03 siguen pendientes.
+
 Sistema full-stack conectado a **Microsoft SQL Server (`MMET_BI_OLTP`)** para la gestión operacional y el análisis de cambios en el estrés percibido (**PSS-10**) y los síntomas postraumáticos (**PCL-5**) asociados a programas universitarios de meditación y mindfulness (`P-01` a `P-04` y `MIXTO`).
 
 ---
@@ -49,15 +63,21 @@ Solución de Inteligencia de Negocios y soporte transaccional OLTP diseñada par
 ## 2. Arquitectura y Estructura del Proyecto
 
 * **Base de Datos OLTP (`sql_server/`):** Microsoft SQL Server 2019 / 2022 (`T-SQL`).
-  * `sql_server/01_crear_bd_oltp_sqlserver.sql`: Creación de la base `MMET_BI_OLTP`, tablas de dominio, índices, restricciones `CHECK` y triggers de reglas operativas.
-  * `sql_server/02_poblar_datos_10k_sqlserver.sql`: Poblamiento determinístico idempotente (~20,000 registros totales, ~10,500+ asistencias) calibrado estadísticamente para el periodo `2026-II`.
-* **Backend (`backend/`):** NestJS 10 + TypeScript (`mssql` / `msnodesqlv8`), expuesto en el puerto `4000` bajo el prefijo global `/api`.
+  * `sql_server/01_crear_bd_oltp_sqlserver.sql`: esquema canónico completo. **Destructivo:** elimina y vuelve a crear las tablas; usar solo para reconstruir una base vacía/de prueba.
+  * `sql_server/02_poblar_datos_10k_sqlserver.sql`: datos sintéticos de demostración. **Destructivo:** limpia el dataset antes de poblarlo; no usar como actualización.
+  * `sql_server/03_actualizar_cuestionarios_y_acceso_sqlserver.sql`: actualización incremental idempotente, no destructiva.
+  * `sql_server/04_configurar_versiones_cuestionarios_sqlserver.sql`: carga idempotente de PCL-5 y estructura PSS-10 bloqueada; no genera respuestas históricas.
+  * `sql_server/05_verificar_cuestionarios_sqlserver.sql`: valida estructura, opciones, puntuación por ítem y trazabilidad.
+* **Backend (`backend/`):** NestJS 10 + TypeScript (`mssql` / `msnodesqlv8`), expuesto en el puerto `4000` bajo el prefijo global `/api`. La cookie de sesión es HttpOnly, tiene vencimiento y se almacena en SQL como hash del token.
   * `src/database/`: Conexión a SQL Server vía **Windows Auth** (`msnodesqlv8`) o **SQL Auth** (`mssql` / Tedious).
   * `src/analytics/`: Consultas analíticas para KPIs (`KPI-01` a `KPI-04`) y reportes (`RO-03`, `RO-04`, `RG-01`, `RG-03`).
-  * `src/operacion/`: Registro transaccional de asistencias y resultados de evaluación con versionado.
+  * `src/auth/`: Inicio/cierre de sesión, gestión de cuentas por ADMIN y autorización por rol.
+  * `src/cuestionarios/`: Oportunidades del estudiante, borrador, envío completo, puntuación en servidor y correcciones con versiones.
+  * `src/operacion/`: Gestión operacional de asistencias. El endpoint antiguo de puntaje manual está deshabilitado.
 * **Frontend (`frontend/`):** Next.js 15 + React 19 + Tailwind CSS + Apache ECharts (`echarts`), expuesto en el puerto `3000`.
   * `src/components/`: Dashboard analítico (`DashboardApp.tsx`), reporte de continuidad (`ContinuidadReport.tsx`), vista operacional (`OperacionView.tsx`), gráficos (`EChartBox.tsx`), tablas responsivas (`ResponsiveTable.tsx`) y semáforos (`SemaforoBadge.tsx`).
   * `src/lib/api.ts`: Cliente HTTP hacia el backend (`NEXT_PUBLIC_API_URL`).
+  * `StudentEvaluations.tsx`: Portal de estudiante para completar formularios, guardar borradores y enviarlos.
 
 ---
 
@@ -122,7 +142,17 @@ Solución de Inteligencia de Negocios y soporte transaccional OLTP diseñada par
 * `GET /api/operacion/sesiones` — Listado de sesiones con conteo de asistencias e inasistencias (`id_programa`).
 * `GET /api/operacion/oportunidades-abiertas` — Oportunidades de evaluación aplicables y su resultado vigente (`id_programa`).
 * `POST /api/operacion/asistencias` — Registra o actualiza asistencia (`MERGE`) validando que la sesión esté `REALIZADA`.
-* `POST /api/operacion/resultados` — Registra resultado v1 o versiona una corrección (`motivo_correccion` obligatorio si ya existe resultado vigente).
+
+### Acceso y cuestionarios
+* `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` — Sesiones mediante cookie HttpOnly.
+* `POST /api/auth/users` — Crear cuentas; solo rol `ADMIN`. Contraseñas de al menos 14 caracteres.
+* El panel admin incluye **Cuentas de estudiantes** para elegir estudiantes con PCL-5 pendientes; genera una contraseña temporal aleatoria que se muestra al crear la cuenta.
+* `GET /api/estudiante/evaluaciones` — Oportunidades completas asignadas a la cuenta.
+* `GET /api/estudiante/evaluaciones/:id` — Versión, instrucciones, ítems, opciones y respuestas guardadas.
+* `PUT /api/estudiante/evaluaciones/:id/borrador` — Guardar/continuar un borrador parcial.
+* `POST /api/estudiante/evaluaciones/:id/enviar` — Validar todos los ítems y calcular el total en el servidor.
+* `POST /api/evaluacion/admin/:id/corregir` — Crear una versión corregida con motivo; conserva respuestas y resultado previos.
+* `POST /api/operacion/resultados` — **Deshabilitado**; no acepta puntajes totales ingresados manualmente.
 
 ---
 
@@ -139,6 +169,11 @@ DB_AUTH_MODE=windows
 DB_SERVER=localhost
 DB_DATABASE=MMET_BI_OLTP
 DB_ODBC_DRIVER=ODBC Driver 17 for SQL Server
+
+# Cuenta inicial local (generada para este entorno; no publicar estos valores)
+BOOTSTRAP_ADMIN_USERNAME=admin-local
+# La clave real es local: backend/.env y backend/.local-admin-credentials.txt.
+# No reemplazar ni copiarla al repositorio.
 
 # Solo requerido cuando DB_AUTH_MODE=sql
 DB_PORT=1433
@@ -158,23 +193,33 @@ NEXT_PUBLIC_API_URL=http://localhost:4000/api
 
 ## 7. Ejecución Local
 
-1. **Crear y poblar la base de datos (SQL Server):**
+1. **En una base local ya poblada, actualizar sin borrar datos:**
+   ```powershell
+   sqlcmd -S localhost -E -i "sql_server\03_actualizar_cuestionarios_y_acceso_sqlserver.sql"
+   sqlcmd -S localhost -E -i "sql_server\04_configurar_versiones_cuestionarios_sqlserver.sql"
+   sqlcmd -S localhost -E -i "sql_server\05_verificar_cuestionarios_sqlserver.sql"
+   ```
+
+   Para reconstruir una base descartable desde cero, usar explícitamente:
    ```powershell
    sqlcmd -S localhost -E -i "sql_server\01_crear_bd_oltp_sqlserver.sql"
    sqlcmd -S localhost -E -i "sql_server\02_poblar_datos_10k_sqlserver.sql"
+   sqlcmd -S localhost -E -i "sql_server\04_configurar_versiones_cuestionarios_sqlserver.sql"
+   sqlcmd -S localhost -E -i "sql_server\05_verificar_cuestionarios_sqlserver.sql"
    ```
+   Los archivos `01` y `02` recrean esquema y datos. La cuenta local `admin-local` se crea al arrancar el backend; sus credenciales están en `backend/.local-admin-credentials.txt` (archivo ignorado por Git). El administrador debe crear las cuentas de estudiantes desde `POST /api/auth/users`.
 
 2. **Iniciar el Backend (NestJS — puerto `4000`):**
    ```powershell
    cd backend
-   npm install
+   npm ci
    npm run start:dev
    ```
 
 3. **Iniciar el Frontend (Next.js — puerto `3000`):**
    ```powershell
    cd frontend
-   npm install
+   npm ci
    npm run dev
    ```
 

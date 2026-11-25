@@ -14,6 +14,10 @@
    ============================================================================
    Uso sugerido en SSMS o sqlcmd:
      sqlcmd -S localhost -E -i "02_poblar_datos_10k_sqlserver.sql"
+   ADVERTENCIA: este archivo limpia y vuelve a poblar el dataset sintético.
+   Para habilitar versiones de cuestionarios después de poblar, ejecutar
+   04_configurar_versiones_cuestionarios_sqlserver.sql. Los totales generados
+   aquí no se convierten retroactivamente en respuestas por ítem.
    ============================================================================ */
 
 USE MMET_BI_OLTP;
