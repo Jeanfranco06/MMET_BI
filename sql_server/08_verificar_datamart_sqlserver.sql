@@ -22,7 +22,7 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
-USE MMET_BI_OLTP;
+USE MMET_BI_DM;
 GO
 
 DECLARE @fecha_corte DATE = '2026-11-23';
@@ -103,8 +103,8 @@ IF EXISTS (
 IF EXISTS (
     SELECT 1
       FROM dm.HechoResultadosEvaluacion hr
-      JOIN dbo.resultados_evaluacion ri ON ri.id_resultado = hr.id_resultado_inicial
-      JOIN dbo.resultados_evaluacion rf ON rf.id_resultado = hr.id_resultado_final
+      JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion ri ON ri.id_resultado = hr.id_resultado_inicial
+      JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion rf ON rf.id_resultado = hr.id_resultado_final
      WHERE ri.en_ventana = 0 OR rf.en_ventana = 0
 )
     THROW 53006, N'Violación de calidad: existen evaluaciones tardías incluidas en dm.HechoResultadosEvaluacion.', 1;

@@ -260,7 +260,21 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
   };
 
   const opCols: TableColumn<any>[] = [
-    { key: 'est', header: 'Estudiante', isRowHeader: true, render: (r) => r.codigo_anonimizado },
+    {
+      key: 'est',
+      header: 'Estudiante',
+      isRowHeader: true,
+      render: (r) => (
+        <div className="min-w-0">
+          <div className="font-mono font-semibold text-slate-900 text-xs">{r.codigo_estudiante}</div>
+          {(r.nombres || r.apellidos) && (
+            <div className="text-[11px] text-slate-500 truncate">
+              {r.nombres} {r.apellidos}
+            </div>
+          )}
+        </div>
+      ),
+    },
     { key: 'prog', header: 'Programa', render: (r) => r.codigo_programa },
     { key: 'inst', header: 'Instrumento', render: (r) => `${r.codigo_instrumento} (${r.momento})` },
     { key: 'vent', header: 'Ventana', render: (r) => `${r.fecha_ventana_inicio} → ${r.fecha_ventana_fin}` },
@@ -765,7 +779,7 @@ export function OperacionView({ activeTab, filtros, userRole, onDataMutated }: O
         }
         subtitle={
           corrTarget
-            ? `${corrTarget.codigo_anonimizado} · ${corrTarget.codigo_programa} · Se creará una nueva versión auditada`
+            ? `${corrTarget.codigo_estudiante}${corrTarget.nombres || corrTarget.apellidos ? ` (${[corrTarget.nombres, corrTarget.apellidos].filter(Boolean).join(' ')})` : ''} · ${corrTarget.codigo_programa} · Se creará una nueva versión auditada`
             : undefined
         }
       >

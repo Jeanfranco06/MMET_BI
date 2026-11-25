@@ -8,9 +8,9 @@
      sqlcmd -S localhost -E -C -i "sql_server\07_etl_cargar_datamart_sqlserver.sql"
 
    Implementa:
-     - dm.usp_ejecutar_etl @fecha_corte DATE
-       Extrae de dbo.*, transforma aplicando reglas oficiales (D01, D02,
-       calidad de pares PSS-10/PCL-5) y carga de forma idempotente en dm.*.
+     - [MMET_BI_DM].dm.usp_ejecutar_etl @fecha_corte DATE
+       Extrae de [MMET_BI_OLTP].dbo.*, transforma aplicando reglas oficiales (D01, D02,
+       calidad de pares PSS-10/PCL-5) y carga de forma idempotente en [MMET_BI_DM].dm.*.
      - Ejecución inicial para cortes clave del semestre 2026-II, incluyendo
        el corte oficial 2026-11-23.
    ============================================================================ */
@@ -21,7 +21,7 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
-USE MMET_BI_OLTP;
+USE MMET_BI_DM;
 GO
 
 CREATE OR ALTER PROCEDURE dm.usp_ejecutar_etl
@@ -55,25 +55,42 @@ BEGIN
         -- 2. SINCRONIZACIÓN IDEMPOTENTE DE DIMENSIONES DINÁMICAS (MERGE)
         -- ====================================================================
 
-        -- 2.1 DimEstudiante
+        -- 2.1 DimEstudiante (minimización de datos: NO copia nombres, apellidos ni correo_institucional;
+        --     deriva grupo_etario desde edad_anios en tramos estándar: 18-20, 21-24, 25+)
         MERGE dm.DimEstudiante AS tgt
-        USING dbo.estudiantes AS src
+        USING (
+            SELECT
+                e.id_estudiante,
+                e.codigo_estudiante,
+                e.edad_anios,
+                CASE
+                    WHEN e.edad_anios BETWEEN 18 AND 20 THEN N'18-20'
+                    WHEN e.edad_anios BETWEEN 21 AND 24 THEN N'21-24'
+                    ELSE N'25+'
+                END AS grupo_etario,
+                e.sexo_codificado,
+                e.facultad_o_area,
+                e.carrera,
+                e.ciclo_academico
+              FROM [MMET_BI_OLTP].dbo.estudiantes e
+        ) AS src
            ON tgt.id_estudiante = src.id_estudiante
         WHEN MATCHED THEN
             UPDATE SET
-                tgt.codigo_anonimizado = src.codigo_anonimizado,
-                tgt.edad_anios         = src.edad_anios,
-                tgt.grupo_etario       = src.grupo_etario,
-                tgt.sexo_codificado    = src.sexo_codificado,
-                tgt.facultad_o_area    = src.facultad_o_area,
-                tgt.ciclo_academico    = src.ciclo_academico
+                tgt.codigo_estudiante = src.codigo_estudiante,
+                tgt.edad_anios        = src.edad_anios,
+                tgt.grupo_etario      = src.grupo_etario,
+                tgt.sexo_codificado   = src.sexo_codificado,
+                tgt.facultad_o_area   = src.facultad_o_area,
+                tgt.carrera           = src.carrera,
+                tgt.ciclo_academico   = src.ciclo_academico
         WHEN NOT MATCHED THEN
-            INSERT (id_estudiante, codigo_anonimizado, edad_anios, grupo_etario, sexo_codificado, facultad_o_area, ciclo_academico)
-            VALUES (src.id_estudiante, src.codigo_anonimizado, src.edad_anios, src.grupo_etario, src.sexo_codificado, src.facultad_o_area, src.ciclo_academico);
+            INSERT (id_estudiante, codigo_estudiante, edad_anios, grupo_etario, sexo_codificado, facultad_o_area, carrera, ciclo_academico)
+            VALUES (src.id_estudiante, src.codigo_estudiante, src.edad_anios, src.grupo_etario, src.sexo_codificado, src.facultad_o_area, src.carrera, src.ciclo_academico);
 
         -- 2.2 DimPrograma
         MERGE dm.DimPrograma AS tgt
-        USING dbo.programas AS src
+        USING [MMET_BI_OLTP].dbo.programas AS src
            ON tgt.id_programa = src.id_programa
         WHEN MATCHED THEN
             UPDATE SET
@@ -89,7 +106,7 @@ BEGIN
 
         -- 2.3 DimPractica (P-01..P-04 y MIXTO, tipo Unicomponente/Mixto)
         MERGE dm.DimPractica AS tgt
-        USING dbo.cat_practicas AS src
+        USING [MMET_BI_OLTP].dbo.cat_practicas AS src
            ON tgt.id_practica = src.id_practica
         WHEN MATCHED THEN
             UPDATE SET
@@ -109,7 +126,7 @@ BEGIN
 
         -- 2.4 DimInstrumento (PSS-10 y PCL-5 estrictamente separados)
         MERGE dm.DimInstrumento AS tgt
-        USING dbo.cat_instrumentos AS src
+        USING [MMET_BI_OLTP].dbo.cat_instrumentos AS src
            ON tgt.id_instrumento = src.id_instrumento
         WHEN MATCHED THEN
             UPDATE SET
@@ -141,8 +158,8 @@ BEGIN
                 cat.codigo_categoria,
                 cat.nombre_categoria,
                 ei.anio_ocurrencia_aprox
-              FROM dbo.eventos_indice ei
-              JOIN dbo.cat_categorias_evento_indice cat
+              FROM [MMET_BI_OLTP].dbo.eventos_indice ei
+              JOIN [MMET_BI_OLTP].dbo.cat_categorias_evento_indice cat
                 ON cat.id_categoria_evento = ei.id_categoria_evento
         ) AS src
            ON tgt.id_evento_indice = src.id_evento_indice
@@ -183,8 +200,8 @@ BEGIN
                     WHEN a.fecha_retiro IS NOT NULL AND a.fecha_retiro <= @fecha_corte THEN a.fecha_retiro
                     ELSE @fecha_corte
                 END AS fecha_limite_exigibilidad
-              FROM dbo.asignaciones a
-              JOIN dbo.programas p ON p.id_programa = a.id_programa
+              FROM [MMET_BI_OLTP].dbo.asignaciones a
+              JOIN [MMET_BI_OLTP].dbo.programas p ON p.id_programa = a.id_programa
              WHERE a.fecha_inscripcion <= @fecha_corte
         ),
         PrimeraAsistencia AS (
@@ -192,11 +209,11 @@ BEGIN
                 ba.id_asignacion,
                 MIN(s.fecha_sesion) AS fecha_primera_asistencia
               FROM BaseAsignaciones ba
-              JOIN dbo.sesiones s
+              JOIN [MMET_BI_OLTP].dbo.sesiones s
                 ON s.id_programa = ba.id_programa
                AND s.estado_sesion = N'REALIZADA'
                AND s.fecha_sesion <= ba.fecha_limite_exigibilidad
-              JOIN dbo.asistencias asis
+              JOIN [MMET_BI_OLTP].dbo.asistencias asis
                 ON asis.id_asignacion = ba.id_asignacion
                AND asis.id_sesion = s.id_sesion
                AND asis.estado_asistencia = N'ASISTIO'
@@ -217,12 +234,12 @@ BEGIN
               FROM BaseAsignaciones ba
               JOIN PrimeraAsistencia pa
                 ON pa.id_asignacion = ba.id_asignacion
-              JOIN dbo.sesiones s
+              JOIN [MMET_BI_OLTP].dbo.sesiones s
                 ON s.id_programa = ba.id_programa
                AND s.estado_sesion = N'REALIZADA'
                AND s.fecha_sesion >= pa.fecha_primera_asistencia
                AND s.fecha_sesion <= ba.fecha_limite_exigibilidad
-              LEFT JOIN dbo.asistencias asis
+              LEFT JOIN [MMET_BI_OLTP].dbo.asistencias asis
                 ON asis.id_asignacion = ba.id_asignacion
                AND asis.id_sesion = s.id_sesion
         ),
@@ -312,7 +329,7 @@ BEGIN
             N'dbo.oportunidades_evaluacion',
             r.id_oportunidad,
             CONCAT(N'Oportunidad con ', COUNT(*), N' resultados vigentes (es_vigente=1) al corte ', CONVERT(NVARCHAR(10), @fecha_corte, 23), N'. Excluida del hecho de resultados.')
-          FROM dbo.resultados_evaluacion r
+          FROM [MMET_BI_OLTP].dbo.resultados_evaluacion r
          WHERE r.es_vigente = 1
            AND r.estado_validez = N'VALIDO'
            AND r.fecha_realizacion <= @fecha_corte
@@ -328,7 +345,7 @@ BEGIN
         -- ====================================================================
         ;WITH OportunidadesConDuplicado AS (
             SELECT r.id_oportunidad
-              FROM dbo.resultados_evaluacion r
+              FROM [MMET_BI_OLTP].dbo.resultados_evaluacion r
              WHERE r.es_vigente = 1
                AND r.estado_validez = N'VALIDO'
                AND r.fecha_realizacion <= @fecha_corte
@@ -343,7 +360,7 @@ BEGIN
                 r.numero_version,
                 r.fecha_realizacion,
                 r.en_ventana
-              FROM dbo.resultados_evaluacion r
+              FROM [MMET_BI_OLTP].dbo.resultados_evaluacion r
              WHERE r.es_vigente = 1
                AND r.estado_validez = N'VALIDO'
                AND r.fecha_realizacion <= @fecha_corte
@@ -376,8 +393,8 @@ BEGIN
                     WHEN rv.id_resultado IS NULL AND op.fecha_ventana_fin > @fecha_corte THEN N'PENDIENTE_EN_VENTANA'
                     ELSE N'VENCIDA'
                 END AS codigo_estado_eval
-              FROM dbo.oportunidades_evaluacion op
-              JOIN dbo.programas p ON p.id_programa = op.id_programa
+              FROM [MMET_BI_OLTP].dbo.oportunidades_evaluacion op
+              JOIN [MMET_BI_OLTP].dbo.programas p ON p.id_programa = op.id_programa
               LEFT JOIN ResultadoVigenteUnico rv ON rv.id_oportunidad = op.id_oportunidad
              WHERE op.aplicable = 1
                AND op.fecha_ventana_inicio <= @fecha_corte
@@ -451,17 +468,17 @@ BEGIN
                 N', Final=', ISNULL(CAST(op_f.id_evento_indice AS NVARCHAR(20)), N'NULL'),
                 N'). Excluido de HechoResultadosEvaluacion.'
             )
-          FROM dbo.oportunidades_evaluacion op_i
-          JOIN dbo.resultados_evaluacion r_i
+          FROM [MMET_BI_OLTP].dbo.oportunidades_evaluacion op_i
+          JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r_i
             ON r_i.id_oportunidad = op_i.id_oportunidad
            AND r_i.es_vigente = 1 AND r_i.estado_validez = N'VALIDO'
            AND r_i.en_ventana = 1 AND r_i.fecha_realizacion <= @fecha_corte
-          JOIN dbo.oportunidades_evaluacion op_f
+          JOIN [MMET_BI_OLTP].dbo.oportunidades_evaluacion op_f
             ON op_f.id_asignacion = op_i.id_asignacion
            AND op_f.id_instrumento = op_i.id_instrumento
            AND op_f.momento = N'FINAL'
            AND op_f.aplicable = 1
-          JOIN dbo.resultados_evaluacion r_f
+          JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r_f
             ON r_f.id_oportunidad = op_f.id_oportunidad
            AND r_f.es_vigente = 1 AND r_f.estado_validez = N'VALIDO'
            AND r_f.en_ventana = 1 AND r_f.fecha_realizacion <= @fecha_corte
@@ -472,8 +489,8 @@ BEGIN
            AND NOT EXISTS (
                -- Solo reportar si no existe ya un par válido coincidente para ese evento
                SELECT 1
-                 FROM dbo.oportunidades_evaluacion op_ok
-                 JOIN dbo.resultados_evaluacion r_ok
+                 FROM [MMET_BI_OLTP].dbo.oportunidades_evaluacion op_ok
+                 JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r_ok
                    ON r_ok.id_oportunidad = op_ok.id_oportunidad
                   AND r_ok.es_vigente = 1 AND r_ok.estado_validez = N'VALIDO'
                   AND r_ok.en_ventana = 1 AND r_ok.fecha_realizacion <= @fecha_corte
@@ -503,12 +520,12 @@ BEGIN
                 N', Final=', ISNULL(CAST(op_f.id_version_instrumento AS NVARCHAR(20)), N'HEREDADO'),
                 N'). Excluido de HechoResultadosEvaluacion.'
             )
-          FROM dbo.oportunidades_evaluacion op_i
-          JOIN dbo.resultados_evaluacion r_i
+          FROM [MMET_BI_OLTP].dbo.oportunidades_evaluacion op_i
+          JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r_i
             ON r_i.id_oportunidad = op_i.id_oportunidad
            AND r_i.es_vigente = 1 AND r_i.estado_validez = N'VALIDO'
            AND r_i.en_ventana = 1 AND r_i.fecha_realizacion <= @fecha_corte
-          JOIN dbo.oportunidades_evaluacion op_f
+          JOIN [MMET_BI_OLTP].dbo.oportunidades_evaluacion op_f
             ON op_f.id_asignacion = op_i.id_asignacion
            AND op_f.id_instrumento = op_i.id_instrumento
            AND op_f.momento = N'FINAL'
@@ -518,7 +535,7 @@ BEGIN
                OR
                (op_i.codigo_instrumento = N'PCL-5' AND op_i.id_evento_indice IS NOT NULL AND op_i.id_evento_indice = op_f.id_evento_indice)
            )
-          JOIN dbo.resultados_evaluacion r_f
+          JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r_f
             ON r_f.id_oportunidad = op_f.id_oportunidad
            AND r_f.es_vigente = 1 AND r_f.estado_validez = N'VALIDO'
            AND r_f.en_ventana = 1 AND r_f.fecha_realizacion <= @fecha_corte
@@ -531,7 +548,7 @@ BEGIN
         -- 7.3 Inserción de pares válidos limpios en dm.HechoResultadosEvaluacion
         ;WITH OportunidadesConDuplicado AS (
             SELECT r.id_oportunidad
-              FROM dbo.resultados_evaluacion r
+              FROM [MMET_BI_OLTP].dbo.resultados_evaluacion r
              WHERE r.es_vigente = 1
                AND r.estado_validez = N'VALIDO'
                AND r.fecha_realizacion <= @fecha_corte
@@ -552,8 +569,8 @@ BEGIN
                 r.id_resultado,
                 r.puntaje_total,
                 r.fecha_realizacion
-              FROM dbo.oportunidades_evaluacion op
-              JOIN dbo.resultados_evaluacion r
+              FROM [MMET_BI_OLTP].dbo.oportunidades_evaluacion op
+              JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion r
                 ON r.id_oportunidad = op.id_oportunidad
              WHERE op.aplicable = 1
                AND r.es_vigente = 1
@@ -594,7 +611,7 @@ BEGIN
                    (ini.codigo_instrumento = N'PCL-5' AND ini.id_evento_indice IS NOT NULL AND ini.id_evento_indice = fin.id_evento_indice)
                )
                AND fin.fecha_realizacion >= ini.fecha_realizacion
-              JOIN dbo.programas p ON p.id_programa = ini.id_programa
+              JOIN [MMET_BI_OLTP].dbo.programas p ON p.id_programa = ini.id_programa
              WHERE ini.momento = N'INICIAL'
         )
         INSERT INTO dm.HechoResultadosEvaluacion (

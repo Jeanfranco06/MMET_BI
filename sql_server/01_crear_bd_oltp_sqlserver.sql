@@ -36,15 +36,15 @@ DROP TABLE IF EXISTS dbo.mediciones_complementarias;
 DROP TABLE IF EXISTS dbo.respuestas_evaluacion;
 DROP TABLE IF EXISTS dbo.respuestas_borrador;
 DROP TABLE IF EXISTS dbo.sesiones_autenticacion;
-DROP TABLE IF EXISTS dbo.usuarios_sistema;
-DROP TABLE IF EXISTS dbo.instrumento_opciones_respuesta;
-DROP TABLE IF EXISTS dbo.instrumento_items;
-DROP TABLE IF EXISTS dbo.instrumento_versiones;
 DROP TABLE IF EXISTS dbo.historial_asistencias;
 DROP TABLE IF EXISTS dbo.historial_estados_asignacion;
 DROP TABLE IF EXISTS dbo.historial_estados_sesion;
 DROP TABLE IF EXISTS dbo.resultados_evaluacion;
 DROP TABLE IF EXISTS dbo.oportunidades_evaluacion;
+DROP TABLE IF EXISTS dbo.usuarios_sistema;
+DROP TABLE IF EXISTS dbo.instrumento_opciones_respuesta;
+DROP TABLE IF EXISTS dbo.instrumento_items;
+DROP TABLE IF EXISTS dbo.instrumento_versiones;
 DROP TABLE IF EXISTS dbo.eventos_indice;
 DROP TABLE IF EXISTS dbo.asistencias;
 DROP TABLE IF EXISTS dbo.asignaciones;
@@ -111,16 +111,20 @@ GO
 -- ============================================================================
 
 CREATE TABLE dbo.estudiantes (
-    id_estudiante       BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    codigo_anonimizado  NVARCHAR(50)   NOT NULL,
-    edad_anios          SMALLINT       NOT NULL,
-    grupo_etario        NVARCHAR(20)   NOT NULL,
-    sexo_codificado     NVARCHAR(20)   NOT NULL,
-    facultad_o_area     NVARCHAR(80)   NOT NULL,
-    ciclo_academico     SMALLINT       NOT NULL,
-    creado_en           DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_est_creado DEFAULT (SYSDATETIMEOFFSET()),
+    id_estudiante        BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    codigo_estudiante    NVARCHAR(50)   NOT NULL,
+    nombres              NVARCHAR(100)  NOT NULL,
+    apellidos            NVARCHAR(100)  NOT NULL,
+    correo_institucional NVARCHAR(150)  NOT NULL,
+    edad_anios           SMALLINT       NOT NULL,
+    sexo_codificado      NVARCHAR(20)   NOT NULL,
+    facultad_o_area      NVARCHAR(80)   NOT NULL,
+    carrera              NVARCHAR(120)  NOT NULL,
+    ciclo_academico      SMALLINT       NOT NULL,
+    creado_en            DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_est_creado DEFAULT (SYSDATETIMEOFFSET()),
 
-    CONSTRAINT uq_est_codigo UNIQUE (codigo_anonimizado),
+    CONSTRAINT uq_est_codigo UNIQUE (codigo_estudiante),
+    CONSTRAINT uq_est_correo UNIQUE (correo_institucional),
     CONSTRAINT chk_est_edad_adulto CHECK (edad_anios BETWEEN 18 AND 99),
     CONSTRAINT chk_est_ciclo CHECK (ciclo_academico BETWEEN 1 AND 14)
 );

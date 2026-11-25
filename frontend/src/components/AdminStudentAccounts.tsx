@@ -4,7 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Copy, KeyRound, Search, ShieldCheck, UserPlus } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Student = { id_estudiante: number; codigo_anonimizado: string; evaluaciones_disponibles: number };
+type Student = {
+  id_estudiante: number;
+  codigo_estudiante: string;
+  nombres: string;
+  apellidos: string;
+  correo_institucional: string;
+  carrera: string;
+  evaluaciones_disponibles: number;
+};
 
 function makeTemporaryPassword() {
   const random = new Uint8Array(24);
@@ -29,7 +37,11 @@ export function AdminStudentAccounts({ onLogout: _onLogout }: { onLogout?: () =>
 
   const visibleStudents = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return query ? students.filter((item) => item.codigo_anonimizado.toLowerCase().includes(query)) : students;
+    return query
+      ? students.filter((item) =>
+          `${item.codigo_estudiante} ${item.nombres} ${item.apellidos}`.toLowerCase().includes(query),
+        )
+      : students;
   }, [students, search]);
 
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -126,7 +138,7 @@ export function AdminStudentAccounts({ onLogout: _onLogout }: { onLogout?: () =>
 
         <div>
           <label htmlFor="student-search" className="block text-xs font-semibold text-slate-700 mb-1.5">
-            Filtrar por código anonimizado
+            Filtrar por código, nombres o apellidos
           </label>
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -134,7 +146,7 @@ export function AdminStudentAccounts({ onLogout: _onLogout }: { onLogout?: () =>
               id="student-search"
               name="student-search"
               type="search"
-              placeholder="Ej. UNT26-EST-"
+              placeholder="Ej. UNT26-EST- o apellido…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-slate-50/60 pl-9 pr-3 py-2.5 text-xs font-medium text-slate-800 focus:bg-white"
@@ -154,7 +166,7 @@ export function AdminStudentAccounts({ onLogout: _onLogout }: { onLogout?: () =>
             onChange={(e) => {
               setStudentId(e.target.value);
               const selected = students.find((student) => student.id_estudiante === Number(e.target.value));
-              setUsername(selected?.codigo_anonimizado ?? '');
+              setUsername(selected?.codigo_estudiante ?? '');
               setCreated(null);
             }}
             className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-800"
@@ -162,7 +174,7 @@ export function AdminStudentAccounts({ onLogout: _onLogout }: { onLogout?: () =>
             <option value="">Selecciona un estudiante…</option>
             {visibleStudents.map((student) => (
               <option key={student.id_estudiante} value={student.id_estudiante}>
-                {student.codigo_anonimizado} · {student.evaluaciones_disponibles} evaluación(es) disponible(s)
+                {student.codigo_estudiante} — {student.apellidos}, {student.nombres} · {student.evaluaciones_disponibles} evaluación(es)
               </option>
             ))}
           </select>

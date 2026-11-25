@@ -25,7 +25,7 @@ interface ContinuidadReportProps {
 
 interface EstudianteContinuidadRow {
   id_asignacion: number;
-  codigo_anonimizado: string;
+  codigo_estudiante: string;
   facultad_o_area: string;
   ciclo_academico: number;
   codigo_programa: string;
@@ -142,12 +142,12 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
   const columns = useMemo<ColumnDef<EstudianteContinuidadRow, any>[]>(
     () => [
       {
-        accessorKey: 'codigo_anonimizado',
+        accessorKey: 'codigo_estudiante',
         header: 'Estudiante',
         cell: ({ row }) => (
           <div>
             <div className="font-bold text-slate-900 tabular-nums">
-              {row.original.codigo_anonimizado}
+              {row.original.codigo_estudiante}
             </div>
             <div className="text-[11px] text-slate-500">
               {row.original.facultad_o_area} · Ciclo {row.original.ciclo_academico}
@@ -406,7 +406,7 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
           searchPlaceholder="Buscar código, facultad o programa..."
           csvFilename={`RO01_continuidad_${corte}.csv`}
           csvColumns={[
-            { header: 'Código Anonimizado', accessor: (r) => r.codigo_anonimizado },
+            { header: 'Código Estudiante', accessor: (r) => r.codigo_estudiante },
             { header: 'Facultad / Área', accessor: (r) => r.facultad_o_area },
             { header: 'Ciclo', accessor: (r) => r.ciclo_academico },
             { header: 'Programa', accessor: (r) => r.codigo_programa },

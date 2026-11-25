@@ -181,7 +181,18 @@ export const api = {
   login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
   logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
   me: () => apiGet<{ id_usuario: number; id_estudiante: number | null; nombre_usuario: string; rol: string }>('/auth/me'),
-  getStudentsReadyForAccount: () => apiGet<Array<{ id_estudiante: number; codigo_anonimizado: string; evaluaciones_disponibles: number }>>('/auth/students-ready-for-account'),
+  getStudentsReadyForAccount: () =>
+    apiGet<
+      Array<{
+        id_estudiante: number;
+        codigo_estudiante: string;
+        nombres: string;
+        apellidos: string;
+        correo_institucional: string;
+        carrera: string;
+        evaluaciones_disponibles: number;
+      }>
+    >('/auth/students-ready-for-account'),
   createStudentUser: (body: { username: string; password: string; studentId: number }) =>
     apiPost<{ ok: boolean }>('/auth/users', { ...body, role: 'ESTUDIANTE' }),
   getMyEvaluations: () => apiGet<any[]>('/estudiante/evaluaciones'),

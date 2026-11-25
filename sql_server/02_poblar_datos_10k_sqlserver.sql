@@ -115,7 +115,9 @@ CREATE TABLE #nums (n INT NOT NULL PRIMARY KEY);
 INSERT INTO #nums (n) SELECT n FROM e3;
 
 -- ============================================================================
--- 2. ESTUDIANTES (1,000 estudiantes universitarios anonimizados, 18+ años)
+-- 2. ESTUDIANTES (1,000 estudiantes universitarios UNT, 18+ años)
+--    Incluye datos identificables en OLTP (nombres, apellidos, correo, carrera)
+--    que el ETL minimiza al cargar dm.DimEstudiante en MMET_BI_DM.
 -- ============================================================================
 
 ;WITH base_est AS (
@@ -124,33 +126,82 @@ INSERT INTO #nums (n) SELECT n FROM e3;
         CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-EDAD-', n))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 AS u_edad,
         CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-SEXO-', n))) AS BIGINT)) % 1000000 AS FLOAT) / 1000000.0 AS u_sexo,
         CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-FAC-',  n))) AS BIGINT)) % 8 AS INT) + 1 AS idx_fac,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-CAR-',  n))) AS BIGINT)) % 3 AS INT) + 1 AS idx_car,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-NOM1-', n))) AS BIGINT)) % 16 AS INT) + 1 AS idx_nom1,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-NOM2-', n))) AS BIGINT)) % 12 AS INT) + 1 AS idx_nom2,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-AP1-',  n))) AS BIGINT)) % 20 AS INT) + 1 AS idx_ap1,
+        CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-AP2-',  n))) AS BIGINT)) % 20 AS INT) + 1 AS idx_ap2,
         CAST(ABS(CAST(CHECKSUM(HASHBYTES('SHA2_256', CONCAT('EST-CIC-',  n))) AS BIGINT)) % 10 AS SMALLINT) + 1 AS ciclo
     FROM #nums
 ),
 est_calc AS (
     SELECT
-        *,
-        CAST(18 + FLOOR(POWER(u_edad, 1.65) * 11) AS SMALLINT) AS edad_anios
+        n,
+        CAST(18 + FLOOR(POWER(u_edad, 1.65) * 11) AS SMALLINT) AS edad_anios,
+        CASE WHEN u_sexo < 0.54 THEN N'F' WHEN u_sexo < 0.96 THEN N'M' ELSE N'NO_ESPECIFICADO' END AS sexo_codificado,
+        idx_fac,
+        idx_car,
+        ciclo,
+        CASE
+            WHEN u_sexo < 0.54 THEN
+                CHOOSE(idx_nom1,
+                    N'Valeria', N'Camila', N'Lucía', N'Sofía', N'Mariana', N'Daniela', N'Andrea', N'Gabriela',
+                    N'Fernanda', N'Paula', N'Claudia', N'Natalia', N'Alejandra', N'Fiorella', N'Milagros', N'Karina'
+                ) + N' ' +
+                CHOOSE(idx_nom2,
+                    N'Isabel', N'María', N'Alejandra', N'Beatriz', N'Carolina', N'Elena',
+                    N'Patricia', N'Rosa', N'Teresa', N'Victoria', N'Cecilia', N'Nicole'
+                )
+            ELSE
+                CHOOSE(idx_nom1,
+                    N'Diego', N'Sebastián', N'Mateo', N'Alejandro', N'Carlos', N'Luis', N'Jorge', N'Miguel',
+                    N'Andrés', N'Rodrigo', N'Gabriel', N'Renato', N'Fernando', N'Daniel', N'Kevin', N'Jean'
+                ) + N' ' +
+                CHOOSE(idx_nom2,
+                    N'Antonio', N'Enrique', N'Eduardo', N'Alonso', N'Fabricio', N'Martín',
+                    N'David', N'César', N'Rafael', N'Armando', N'Jesús', N'Alexander'
+                )
+        END AS nombres,
+        CHOOSE(idx_ap1,
+            N'Quispe', N'Rodríguez', N'Sánchez', N'Flores', N'García', N'Chávez', N'Rojas', N'Vargas',
+            N'Castillo', N'Mendoza', N'Torres', N'Salazar', N'Reyes', N'Gutiérrez', N'Paredes', N'Herrera',
+            N'Vásquez', N'Morales', N'Díaz', N'Cruz'
+        ) AS apellido_paterno,
+        CHOOSE(idx_ap2,
+            N'Ramírez', N'Medina', N'Aguilar', N'Huamán', N'Espinoza', N'Alvarado', N'León', N'Ramos',
+            N'Silva', N'Campos', N'Delgado', N'Cárdenas', N'Navarro', N'Cabrera', N'Peña', N'Ortega',
+            N'Ruiz', N'Romero', N'Lozano', N'Zavaleta'
+        ) AS apellido_materno
     FROM base_est
 )
 INSERT INTO dbo.estudiantes (
-    codigo_anonimizado, edad_anios, grupo_etario, sexo_codificado, facultad_o_area, ciclo_academico
+    codigo_estudiante, nombres, apellidos, correo_institucional,
+    edad_anios, sexo_codificado, facultad_o_area, carrera, ciclo_academico
 )
 SELECT
     N'UNT26-EST-' + RIGHT(N'0000' + CAST(n AS NVARCHAR(10)), 4),
+    nombres,
+    apellido_paterno + N' ' + apellido_materno,
+    LOWER(
+        N'est' + RIGHT(N'0000' + CAST(n AS NVARCHAR(10)), 4) + N'@unitru.edu.pe'
+    ),
     edad_anios,
-    CASE
-        WHEN edad_anios BETWEEN 18 AND 20 THEN N'18-20'
-        WHEN edad_anios BETWEEN 21 AND 23 THEN N'21-23'
-        WHEN edad_anios BETWEEN 24 AND 26 THEN N'24-26'
-        ELSE N'27+'
-    END,
-    CASE WHEN u_sexo < 0.54 THEN N'F' WHEN u_sexo < 0.96 THEN N'M' ELSE N'NO_ESPECIFICADO' END,
+    sexo_codificado,
     CHOOSE(idx_fac,
         N'Ingeniería', N'Ciencias Médicas', N'Ciencias Sociales',
         N'Educación y Ciencias de la Comunicación', N'Derecho y Ciencias Políticas',
         N'Ciencias Económicas', N'Ciencias Biológicas', N'Farmacia y Bioquímica'
     ),
+    CASE idx_fac
+        WHEN 1 THEN CHOOSE(idx_car, N'Ingeniería de Sistemas', N'Ingeniería Industrial', N'Ingeniería Civil')
+        WHEN 2 THEN CHOOSE(idx_car, N'Medicina Humana', N'Estomatología', N'Enfermería')
+        WHEN 3 THEN CHOOSE(idx_car, N'Antropología', N'Trabajo Social', N'Turismo')
+        WHEN 4 THEN CHOOSE(idx_car, N'Ciencias de la Comunicación', N'Educación Secundaria', N'Educación Primaria')
+        WHEN 5 THEN CASE WHEN idx_car <= 2 THEN N'Derecho' ELSE N'Ciencia Política y Gobernabilidad' END
+        WHEN 6 THEN CHOOSE(idx_car, N'Administración', N'Contabilidad y Finanzas', N'Economía')
+        WHEN 7 THEN CHOOSE(idx_car, N'Biología', N'Microbiología y Parasitología', N'Biología Pesquera')
+        ELSE N'Farmacia y Bioquímica'
+    END,
     ciclo
 FROM est_calc
 ORDER BY n;

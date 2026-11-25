@@ -61,7 +61,7 @@ export class AnalyticsService {
     const clean = /^\d{4}-\d{2}-\d{2}$/.test(corte) ? corte : '2026-11-23';
     const targetSk = Number(clean.replace(/-/g, ''));
 
-    const rows = await this.db.query<{ sk_tiempo: number; fecha: string }>(
+    const rows = await this.db.queryDm<{ sk_tiempo: number; fecha: string }>(
       `
       SELECT TOP 1
         t.sk_tiempo,
@@ -78,7 +78,7 @@ export class AnalyticsService {
       return { skCorte: Number(rows[0].sk_tiempo), fechaAplicada: rows[0].fecha };
     }
 
-    const latest = await this.db.query<{ sk_tiempo: number; fecha: string }>(
+    const latest = await this.db.queryDm<{ sk_tiempo: number; fecha: string }>(
       `
       SELECT TOP 1
         t.sk_tiempo,
@@ -108,7 +108,7 @@ export class AnalyticsService {
       cortesDisponibles,
       rangoFechas,
     ] = await Promise.all([
-      this.db.query(`
+      this.db.queryDm(`
         SELECT
           id_practica,
           codigo_practica,
@@ -118,7 +118,7 @@ export class AnalyticsService {
         FROM dm.DimPractica
         ORDER BY id_practica
       `),
-      this.db.query(`
+      this.db.queryDm(`
         WITH prog_pract AS (
           SELECT DISTINCT sk_programa, sk_practica
           FROM dm.HechoContinuidad
@@ -139,27 +139,27 @@ export class AnalyticsService {
         LEFT JOIN dm.DimPractica pr ON pr.sk_practica = pp.sk_practica
         ORDER BY p.fecha_inicio, p.id_programa
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT DISTINCT facultad_o_area AS facultad
         FROM dm.DimEstudiante
         ORDER BY facultad_o_area
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT DISTINCT ciclo_academico
         FROM dm.DimEstudiante
         ORDER BY ciclo_academico
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT DISTINCT grupo_etario
         FROM dm.DimEstudiante
         ORDER BY grupo_etario
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT DISTINCT sexo_codificado
         FROM dm.DimEstudiante
         ORDER BY sexo_codificado
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT DISTINCT
           codigo_categoria,
           nombre_categoria
@@ -167,13 +167,13 @@ export class AnalyticsService {
         WHERE es_no_aplica = 0
         ORDER BY codigo_categoria
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT CONVERT(VARCHAR(10), t.fecha, 23) AS fecha_corte
         FROM dm.DimTiempo t
         WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
         ORDER BY t.fecha DESC
       `),
-      this.db.query(`
+      this.db.queryDm(`
         SELECT
           CONVERT(VARCHAR(10), MIN(fecha_inicio), 23) AS fecha_min,
           CONVERT(VARCHAR(10), MAX(fecha_cierre), 23) AS fecha_max
@@ -206,7 +206,7 @@ export class AnalyticsService {
 
     // 1. KPI-01 (PSS-10) y KPI-02 (PCL-5) desde dm.HechoResultadosEvaluacion (estrictamente separados)
     const [paresRows, contRows, cumpRows, totalesRows] = await Promise.all([
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           i.codigo_instrumento,
@@ -231,7 +231,7 @@ export class AnalyticsService {
         params,
       ),
       // 2. KPI-03 (Continuidad — D02) desde dm.HechoContinuidad
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           ISNULL(SUM(CAST(h.EsEvaluable AS INT)), 0) AS evaluables,
@@ -255,7 +255,7 @@ export class AnalyticsService {
         params,
       ),
       // 3. KPI-04 (Cumplimiento — D01) desde dm.HechoCumplimientoEvaluaciones
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           COUNT(*) AS oportunidades_abiertas,
@@ -277,7 +277,7 @@ export class AnalyticsService {
         params,
       ),
       // 4. Totales institucionales desde dimensiones y hechos del DM
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           (SELECT COUNT(*) FROM dm.DimEstudiante) AS total_estudiantes,
@@ -480,7 +480,7 @@ export class AnalyticsService {
     `;
 
     const [totalesInst, countRow, filasRaw] = await Promise.all([
-      this.db.query(
+      this.db.queryDm(
         `
         ${baseCte}
         SELECT
@@ -498,8 +498,8 @@ export class AnalyticsService {
         `,
         params,
       ),
-      this.db.query(`${baseCte} SELECT COUNT(*) AS total_registros FROM agrupado`, params),
-      this.db.query(
+      this.db.queryDm(`${baseCte} SELECT COUNT(*) AS total_registros FROM agrupado`, params),
+      this.db.queryDm(
         `
         ${baseCte}
         SELECT *
@@ -570,7 +570,7 @@ export class AnalyticsService {
     // RG-02: Lee directamente desde dm.vw_HechoEfectividadPractica filtrando por Facultad/Área
     // ANTES de agrupar por Práctica × Instrumento y exigiendo ParesValidos >= 5.
     const [porPracticaRaw, porProgramaRaw] = await Promise.all([
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           pr.id_practica,
@@ -617,7 +617,7 @@ export class AnalyticsService {
         `,
         params,
       ),
-      this.db.query(
+      this.db.queryDm(
         `
         SELECT
           p.id_programa,
@@ -732,7 +732,7 @@ export class AnalyticsService {
       WITH filtrado AS (
         SELECT
           h.id_asignacion,
-          e.codigo_anonimizado,
+          e.codigo_estudiante,
           e.facultad_o_area,
           e.ciclo_academico,
           p.id_programa,
@@ -763,12 +763,12 @@ export class AnalyticsService {
           AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
           AND (@ciclo IS NULL OR e.ciclo_academico = @ciclo)
           AND (@estado IS NULL OR ec.codigo_estado = @estado)
-          AND (@buscar IS NULL OR e.codigo_anonimizado LIKE @buscar)
+          AND (@buscar IS NULL OR e.codigo_estudiante LIKE @buscar)
       )
     `;
 
     const [totalesRows, estudiantesRows, porProgramaRaw] = await Promise.all([
-      this.db.query(
+      this.db.queryDm(
         `${baseCte}
         SELECT
           COUNT(*) AS total_registros,
@@ -785,11 +785,11 @@ export class AnalyticsService {
         FROM filtrado`,
         params,
       ),
-      this.db.query(
+      this.db.queryDm(
         `${baseCte}
         SELECT
           id_asignacion,
-          codigo_anonimizado,
+          codigo_estudiante,
           facultad_o_area,
           ciclo_academico,
           codigo_programa,
@@ -812,11 +812,11 @@ export class AnalyticsService {
             WHEN N'ACTIVO' THEN 4
             ELSE 5
           END,
-          codigo_anonimizado ASC
+          codigo_estudiante ASC
         OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
         params,
       ),
-      this.db.query(
+      this.db.queryDm(
         `${baseCte}
         SELECT
           id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica,
@@ -925,7 +925,7 @@ export class AnalyticsService {
         SELECT
           h.id_oportunidad,
           p.id_programa,
-          e.codigo_anonimizado,
+          e.codigo_estudiante,
           e.facultad_o_area,
           p.codigo_programa,
           p.periodo_academico,
@@ -974,12 +974,12 @@ export class AnalyticsService {
           AND (@instrumento IS NULL OR i.codigo_instrumento = @instrumento)
           AND (@categoriaEvento IS NULL OR (ev.es_no_aplica = 0 AND ev.codigo_categoria = @categoriaEvento))
           AND (@estado IS NULL OR ee.codigo_estado = @estado)
-          AND (@buscar IS NULL OR e.codigo_anonimizado LIKE @buscar OR e.facultad_o_area LIKE @buscar)
+          AND (@buscar IS NULL OR e.codigo_estudiante LIKE @buscar OR e.facultad_o_area LIKE @buscar)
       )
     `;
 
     const [totalesRow, oportunidadesRows] = await Promise.all([
-      this.db.query(
+      this.db.queryDm(
         `
         ${baseCte}
         SELECT
@@ -995,14 +995,14 @@ export class AnalyticsService {
         `,
         params,
       ),
-      this.db.query(
+      this.db.queryDm(
         `
         ${baseCte}
         SELECT *
         FROM filtrado
         ORDER BY
           CASE WHEN codigo_instrumento = N'PSS-10' THEN 1 ELSE 2 END,
-          codigo_anonimizado ASC,
+          codigo_estudiante ASC,
           id_programa ASC,
           CASE WHEN momento = N'INICIAL' THEN 1 ELSE 2 END
         OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY

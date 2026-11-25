@@ -94,15 +94,15 @@ export class AuthService implements OnModuleInit {
 
   async getStudentsReadyForAccount() {
     return this.db.query(
-      `SELECT e.id_estudiante,e.codigo_anonimizado,COUNT_BIG(op.id_oportunidad) AS evaluaciones_disponibles
+      `SELECT e.id_estudiante,e.codigo_estudiante,e.nombres,e.apellidos,e.correo_institucional,e.carrera,COUNT_BIG(op.id_oportunidad) AS evaluaciones_disponibles
        FROM dbo.estudiantes e
        JOIN dbo.oportunidades_evaluacion op ON op.id_estudiante=e.id_estudiante AND op.aplicable=1 AND op.id_version_instrumento IS NOT NULL
        JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento AND iv.estado_contenido=N'PUBLICADO'
        LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez=N'VALIDO'
        LEFT JOIN dbo.usuarios_sistema u ON u.id_estudiante=e.id_estudiante
        WHERE u.id_usuario IS NULL AND r.id_resultado IS NULL
-       GROUP BY e.id_estudiante,e.codigo_anonimizado
-       ORDER BY e.codigo_anonimizado`,
+       GROUP BY e.id_estudiante,e.codigo_estudiante,e.nombres,e.apellidos,e.correo_institucional,e.carrera
+       ORDER BY e.codigo_estudiante`,
     );
   }
 

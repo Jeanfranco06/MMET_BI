@@ -8,14 +8,14 @@
 
 El detalle histórico de fases 1 a 3 está en [Implementación de fases 1 a 3](FASES_1_A_3_IMPLEMENTACION.md).
 
-- **Motor oficial:** Microsoft SQL Server (`sql_server/`, base `MMET_BI_OLTP` con esquema transaccional `dbo` y esquema analítico Data Mart `dm`). La carpeta `sql/` corresponde a scripts **legados (PostgreSQL)** y no forma parte del flujo oficial del proyecto.
-- **OLTP (`dbo.*`):** Contiene tablas versionadas para formularios, ítems, opciones, borradores, respuestas por ítem, cuentas, sesiones autenticadas y **trazabilidad temporal de asistencias** (`actualizado_en`, `dbo.historial_asistencias` y trigger `dbo.trg_auditar_asistencias` que evita sobrescrituras silenciosas).
+- **Motor oficial:** Microsoft SQL Server (`sql_server/`), con **dos bases de datos físicas separadas** en la misma instancia: **`MMET_BI_OLTP`** (transaccional, esquema `dbo.*`) y **`MMET_BI_DM`** (Data Mart analítico, esquema `dm.*`). La carpeta `sql/` corresponde a scripts **legados (PostgreSQL)** y no forma parte del flujo oficial del proyecto.
+- **OLTP (`MMET_BI_OLTP`, esquema `dbo.*`):** Contiene tablas versionadas para formularios, ítems, opciones, borradores, respuestas por ítem, cuentas, sesiones autenticadas y **trazabilidad temporal de asistencias** (`actualizado_en`, `dbo.historial_asistencias` y trigger `dbo.trg_auditar_asistencias` que evita sobrescrituras silenciosas).
 - **PCL-5 español (`VA-2023-08-29`):** Publicado (20 ítems, escala 0–4, total 0–80, corrección versionada). La fuente señala que esta traducción no ha sido validada en investigación publicada.
 - **PSS-10 español (`PSS10-ES-2026`):** Habilitado y publicado (10 ítems, escala 0–4, inversión automática en ítems 4, 5, 7 y 8, puntaje total 0–40), operando de punta a punta igual que PCL-5.
-- **Data Mart (`dm.*`) y ETL idempotente (`dm.usp_ejecutar_etl`):** Esquema en constelación completo con dimensiones conformadas y específicas, 3 tablas de hechos con restricciones `UNIQUE` de grano, vista agregada `dm.vw_HechoEfectividadPractica` (KPI-05), control de ejecuciones e incidencias de calidad, aplicando las reglas D01, D02 y exclusión de tardías/anomalías.
+- **Data Mart (`MMET_BI_DM`, esquema `dm.*`) y ETL idempotente (`[MMET_BI_DM].dm.usp_ejecutar_etl`):** Base de datos analítica independiente con esquema en constelación (dimensiones conformadas y específicas, 3 tablas de hechos con restricciones `UNIQUE` de grano, vista agregada `dm.vw_HechoEfectividadPractica` para KPI-05, control de ejecuciones e incidencias de calidad). Extrae desde `[MMET_BI_OLTP].dbo.*` aplicando las reglas D01, D02 y exclusión de tardías/anomalías.
 - Las evaluaciones históricas que solo contienen totales permanecen intactas y sin respuestas reconstruidas.
 
-Sistema full-stack conectado a **Microsoft SQL Server (`MMET_BI_OLTP`)** para la gestión operacional y el análisis de cambios en el estrés percibido (**PSS-10**) y los síntomas postraumáticos (**PCL-5**) asociados a programas universitarios de meditación y mindfulness (`P-01` a `P-04` y `MIXTO`).
+Sistema full-stack conectado a **Microsoft SQL Server (`MMET_BI_OLTP` + `MMET_BI_DM`)** para la gestión operacional y el análisis de cambios en el estrés percibido (**PSS-10**) y los síntomas postraumáticos (**PCL-5**) asociados a programas universitarios de meditación y mindfulness (`P-01` a `P-04` y `MIXTO`).
 
 ---
 
@@ -70,13 +70,13 @@ Solución de Inteligencia de Negocios y soporte transaccional OLTP diseñada par
   * `sql_server/03_actualizar_cuestionarios_y_acceso_sqlserver.sql`: actualización incremental idempotente, no destructiva (cuestionarios, acceso y trazabilidad temporal de asistencias).
   * `sql_server/04_configurar_versiones_cuestionarios_sqlserver.sql`: carga idempotente y publicación de versiones activas en español de **PCL-5** (20 ítems) y **PSS-10** (10 ítems, inversión automática en 4, 5, 7 y 8).
   * `sql_server/05_verificar_cuestionarios_sqlserver.sql`: valida estructura, publicación de PCL-5 y PSS-10, puntuación por ítem y trazabilidad de asistencias.
-  * `sql_server/06_crear_datamart_sqlserver.sql`: crea el modelo físico del Data Mart en esquema `dm` (esquema en constelación: 9 dimensiones, 3 tablas de hechos con grano garantizado, vista `dm.vw_HechoEfectividadPractica` y tablas de control ETL).
-  * `sql_server/07_etl_cargar_datamart_sqlserver.sql`: crea el procedimiento idempotente `dm.usp_ejecutar_etl @fecha_corte` (reglas D01, D02 y control de calidad) y ejecuta la carga inicial de cortes clave 2026-II (incluyendo `2026-11-23`).
-  * `sql_server/08_verificar_datamart_sqlserver.sql`: verifica conteos, ausencia de duplicados de grano, idempotencia, incidencias de calidad y cálculo oficial de `KPI-01` a `KPI-05` al corte `2026-11-23`.
+  * `sql_server/06_crear_datamart_sqlserver.sql`: crea la base de datos física **`MMET_BI_DM`** (si no existe) y el modelo físico del Data Mart en su esquema `dm` (esquema en constelación: 9 dimensiones, 3 tablas de hechos con grano garantizado, vista `dm.vw_HechoEfectividadPractica` y tablas de control ETL).
+  * `sql_server/07_etl_cargar_datamart_sqlserver.sql`: crea en **`MMET_BI_DM`** el procedimiento idempotente `dm.usp_ejecutar_etl @fecha_corte` (extrae de `[MMET_BI_OLTP].dbo.*`, aplica reglas D01, D02 y control de calidad) y ejecuta la carga inicial de cortes clave 2026-II (incluyendo `2026-11-23`).
+  * `sql_server/08_verificar_datamart_sqlserver.sql`: verifica sobre **`MMET_BI_DM`** conteos, ausencia de duplicados de grano, idempotencia, incidencias de calidad y cálculo oficial de `KPI-01` a `KPI-05` al corte `2026-11-23`.
 * **Carpeta `sql/` (legado):** Scripts históricos de PostgreSQL conservados solo como referencia; **no usar** en el despliegue ni en el flujo oficial del proyecto.
 * **Backend (`backend/`):** NestJS 10 + TypeScript (`mssql` / `msnodesqlv8`), expuesto en el puerto `4000` bajo el prefijo global `/api`. La cookie de sesión es HttpOnly, tiene vencimiento y se almacena en SQL como hash del token.
-  * `src/database/`: Conexión a SQL Server vía **Windows Auth** (`msnodesqlv8`) o **SQL Auth** (`mssql` / Tedious).
-  * `src/analytics/`: Consultas analíticas exclusivamente sobre el Data Mart (`dm.*`) para `KPI-01` a `KPI-05` y reportes (`RO-01`, `RO-02`, `RG-01`, `RG-02`).
+  * `src/database/`: Dos pools de conexión a SQL Server vía **Windows Auth** (`msnodesqlv8`) o **SQL Auth** (`mssql` / Tedious): pool principal sobre **`MMET_BI_OLTP`** (`query`) y pool analítico sobre **`MMET_BI_DM`** (`queryDm`).
+  * `src/analytics/`: Consultas analíticas exclusivamente sobre el Data Mart **`MMET_BI_DM`** (`queryDm` -> `dm.*`) para `KPI-01` a `KPI-05` y reportes (`RO-01`, `RO-02`, `RG-01`, `RG-02`).
   * `src/ai/`: Interpretación asistida por IA generativa (`RQ-BI-15`) vía API compatible con OpenAI (Alibaba Cloud Model Studio / Qwen por defecto), con supresión `n < 5` y disclaimer no clínico.
   * `src/auth/`: Inicio/cierre de sesión, gestión de cuentas por ADMIN y autorización por rol.
   * `src/cuestionarios/`: Oportunidades del estudiante, borrador, envío completo, puntuación en servidor y correcciones con versiones.
@@ -152,7 +152,7 @@ Solución de Inteligencia de Negocios y soporte transaccional OLTP diseñada par
 * `POST /api/operacion/sesiones` — Programa una nueva sesión dentro de un programa existente (`ADMIN`, `COORDINACION`).
 * `GET /api/operacion/oportunidades-abiertas` — Oportunidades de evaluación aplicables y su resultado vigente (`id_programa`).
 * `POST /api/operacion/asistencias` — Registra o actualiza asistencia (`MERGE`) validando que la sesión esté `REALIZADA` y registrando auditoría temporal.
-* `POST /api/operacion/etl/ejecutar` — Ejecuta `dm.usp_ejecutar_etl` y devuelve el log de carga e incidencias (`ADMIN`).
+* `POST /api/operacion/etl/ejecutar` — Ejecuta `EXEC [MMET_BI_DM].dm.usp_ejecutar_etl @fecha_corte` y devuelve el log de carga e incidencias desde `MMET_BI_DM` (`ADMIN`).
 
 ### IA Generativa (`/api/ai` — RQ-BI-15)
 * `POST /api/ai/interpretar-evaluacion` — Interpretación preliminar anónima de un resultado PSS-10 o PCL-5 con disclaimer explícito no clínico.
@@ -183,6 +183,7 @@ CORS_ORIGIN=http://localhost:3000
 DB_AUTH_MODE=windows
 DB_SERVER=localhost
 DB_DATABASE=MMET_BI_OLTP
+DB_DM_NAME=MMET_BI_DM
 DB_ODBC_DRIVER=ODBC Driver 17 for SQL Server
 
 # Cuenta inicial local (generada para este entorno; no publicar estos valores)

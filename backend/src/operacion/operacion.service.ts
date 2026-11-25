@@ -38,7 +38,9 @@ export class OperacionService {
       SELECT TOP 50
         op.id_oportunidad,
         op.id_asignacion,
-        e.codigo_anonimizado,
+        e.codigo_estudiante,
+        e.nombres,
+        e.apellidos,
         p.codigo_programa,
         op.codigo_instrumento,
         op.momento,
@@ -210,12 +212,13 @@ export class OperacionService {
     }
 
     try {
+      const dmDb = this.db.dmDatabaseName;
       await this.db.query(
-        `DECLARE @fc DATE = CAST(@fecha AS DATE); EXEC dm.usp_ejecutar_etl @fecha_corte = @fc;`,
+        `DECLARE @fc DATE = CAST(@fecha AS DATE); EXEC [${dmDb}].dm.usp_ejecutar_etl @fecha_corte = @fc;`,
         { fecha },
       );
 
-      const logs = await this.db.query<any>(
+      const logs = await this.db.queryDm<any>(
         `
         SELECT TOP 1
           id_ejecucion_etl,
@@ -238,7 +241,7 @@ export class OperacionService {
 
       const ejecucion = logs[0] || null;
       const incidencias = ejecucion
-        ? await this.db.query<any>(
+        ? await this.db.queryDm<any>(
             `
             SELECT
               id_incidencia,

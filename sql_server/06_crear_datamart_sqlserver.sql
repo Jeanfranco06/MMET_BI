@@ -8,8 +8,8 @@
      sqlcmd -S localhost -E -C -i "sql_server\06_crear_datamart_sqlserver.sql"
 
    Descripción:
-     Crea el esquema `dm` dentro de `MMET_BI_OLTP` con arquitectura Kimball en
-     constelación:
+     Crea la base de datos física `MMET_BI_DM` (si no existe) y su esquema `dm`
+     con arquitectura Kimball en constelación (separada de `MMET_BI_OLTP`):
        - Dimensiones conformadas: DimTiempo, DimEstudiante, DimPrograma, DimPractica
        - Dimensiones específicas: DimInstrumento, DimEventoIndice,
          DimEstadoContinuidad, DimMomento, DimEstadoEvaluacion
@@ -26,7 +26,13 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
-USE MMET_BI_OLTP;
+IF DB_ID(N'MMET_BI_DM') IS NULL
+BEGIN
+    CREATE DATABASE MMET_BI_DM;
+END
+GO
+
+USE MMET_BI_DM;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'dm')
@@ -121,17 +127,18 @@ CREATE UNIQUE INDEX uq_dim_tiempo_fecha
 GO
 
 CREATE TABLE dm.DimEstudiante (
-    sk_estudiante      INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    id_estudiante      BIGINT         NOT NULL,
-    codigo_anonimizado NVARCHAR(50)   NOT NULL,
-    edad_anios         SMALLINT       NOT NULL,
-    grupo_etario       NVARCHAR(20)   NOT NULL,
-    sexo_codificado    NVARCHAR(20)   NOT NULL,
-    facultad_o_area    NVARCHAR(80)   NOT NULL,
-    ciclo_academico    SMALLINT       NOT NULL,
+    sk_estudiante     INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    id_estudiante     BIGINT         NOT NULL,
+    codigo_estudiante NVARCHAR(50)   NOT NULL,
+    edad_anios        SMALLINT       NOT NULL,
+    grupo_etario      NVARCHAR(20)   NOT NULL,
+    sexo_codificado   NVARCHAR(20)   NOT NULL,
+    facultad_o_area   NVARCHAR(80)   NOT NULL,
+    carrera           NVARCHAR(120)  NOT NULL,
+    ciclo_academico   SMALLINT       NOT NULL,
 
     CONSTRAINT uq_dim_est_id     UNIQUE (id_estudiante),
-    CONSTRAINT uq_dim_est_codigo UNIQUE (codigo_anonimizado)
+    CONSTRAINT uq_dim_est_codigo UNIQUE (codigo_estudiante)
 );
 GO
 
@@ -559,5 +566,5 @@ SELECT
  );
 GO
 
-PRINT N'Modelo físico del Data Mart (esquema dm en constelación) creado correctamente.';
+PRINT N'Modelo físico del Data Mart (BD MMET_BI_DM, esquema dm en constelación) creado correctamente.';
 GO

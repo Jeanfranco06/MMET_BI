@@ -25,7 +25,7 @@ interface CumplimientoReportProps {
 
 interface OportunidadRow {
   id_oportunidad: number;
-  codigo_anonimizado: string;
+  codigo_estudiante: string;
   facultad_o_area: string;
   codigo_programa: string;
   codigo_practica: string;
@@ -142,12 +142,12 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
   const columns = useMemo<ColumnDef<OportunidadRow, any>[]>(
     () => [
       {
-        accessorKey: 'codigo_anonimizado',
+        accessorKey: 'codigo_estudiante',
         header: 'Estudiante',
         cell: ({ row }) => (
           <div>
             <div className="font-bold text-slate-900 tabular-nums">
-              {row.original.codigo_anonimizado}
+              {row.original.codigo_estudiante}
             </div>
             <div className="text-[11px] text-slate-500">{row.original.facultad_o_area}</div>
           </div>
@@ -442,7 +442,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
           searchPlaceholder="Buscar código, facultad o programa..."
           csvFilename={`RO02_cumplimiento_${corte}.csv`}
           csvColumns={[
-            { header: 'Código Anonimizado', accessor: (r) => r.codigo_anonimizado },
+            { header: 'Código Estudiante', accessor: (r) => r.codigo_estudiante },
             { header: 'Facultad / Área', accessor: (r) => r.facultad_o_area },
             { header: 'Programa', accessor: (r) => r.codigo_programa },
             { header: 'Instrumento', accessor: (r) => r.codigo_instrumento },

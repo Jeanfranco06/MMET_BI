@@ -38,6 +38,7 @@ services:
       DB_SERVER: ${DB_SERVER:-sqlserver}
       DB_PORT: ${DB_PORT:-1433}
       DB_DATABASE: ${DB_DATABASE:-MMET_BI_OLTP}
+      DB_DM_NAME: ${DB_DM_NAME:-MMET_BI_DM}
       DB_USER: ${DB_USER:-sa}
       DB_PASSWORD: ${DB_PASSWORD:-CambiarPorPasswordSeguro123!}
       DB_ENCRYPT: ${DB_ENCRYPT:-true}
