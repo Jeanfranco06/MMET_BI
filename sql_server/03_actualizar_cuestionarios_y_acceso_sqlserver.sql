@@ -66,9 +66,11 @@ CREATE TABLE dbo.usuarios_sistema (
  creado_en DATETIMEOFFSET(0) NOT NULL CONSTRAINT df_usuario_creado DEFAULT(SYSDATETIMEOFFSET()),
  CONSTRAINT fk_usuario_estudiante FOREIGN KEY(id_estudiante) REFERENCES dbo.estudiantes(id_estudiante),
  CONSTRAINT uq_usuario_nombre UNIQUE(nombre_usuario),
- CONSTRAINT uq_usuario_estudiante UNIQUE(id_estudiante),
  CONSTRAINT chk_usuario_rol CHECK(rol IN(N'ESTUDIANTE',N'COORDINACION',N'EVALUACION',N'DIRECCION',N'ADMIN'))
 );
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'uq_usuario_estudiante' AND object_id = OBJECT_ID(N'dbo.usuarios_sistema'))
+CREATE UNIQUE NONCLUSTERED INDEX uq_usuario_estudiante ON dbo.usuarios_sistema(id_estudiante) WHERE id_estudiante IS NOT NULL;
 GO
 IF OBJECT_ID(N'dbo.sesiones_autenticacion',N'U') IS NULL
 CREATE TABLE dbo.sesiones_autenticacion (
