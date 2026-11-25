@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
+import { AiReportButton } from './AiReportButton';
 
 interface ContinuidadReportProps {
   filtros: FiltrosResponse | null;
@@ -158,17 +159,46 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
     <div className="space-y-5">
       {/* Encabezado y filtros propios del reporte */}
       <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">
-            Seguimiento de Continuidad y Abandono por Estudiante
-          </h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
-            <strong className="text-slate-700">
-              {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
-            </strong>{' '}
-            · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              RO-01 · Seguimiento de Continuidad y Abandono por Estudiante (KPI-03)
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
+              <strong className="text-slate-700">
+                {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
+              </strong>{' '}
+              · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
+            </p>
+          </div>
+          <AiReportButton
+            reporte="RO-01"
+            corte={data?.corte || corte}
+            disabled={loading || !rt}
+            filtros={{ semestre, idPrograma, idPractica, facultad, ciclo, estado }}
+            kpis={
+              rt
+                ? {
+                    evaluables: rt.evaluables,
+                    continuan: rt.continuan,
+                    activos: rt.activos,
+                    en_riesgo: rt.en_riesgo,
+                    abandono: rt.abandono,
+                    retirados: rt.retirados,
+                    no_evaluables: rt.no_evaluables,
+                    tasa_continuidad_pct: rt.tasa_continuidad,
+                    semaforo: rt.semaforo,
+                  }
+                : null
+            }
+            grupos={(data?.por_programa || []).map((p: any) => ({
+              nombre: p.codigo_programa,
+              n: Number(p.evaluables || 0),
+              valor: p.tasa_continuidad,
+              semaforo: p.semaforo,
+            }))}
+          />
         </div>
 
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

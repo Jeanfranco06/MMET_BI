@@ -23,11 +23,11 @@ import { AdminStudentAccounts } from './AdminStudentAccounts';
 type SeccionId = 'evolucion' | 'practicas' | 'continuidad' | 'cumplimiento' | 'operacion' | 'usuarios';
 
 const NAV_ITEMS: Array<{ id: SeccionId; label: string; subtitle: string; Icon: typeof Activity }> = [
-  { id: 'evolucion', label: '1. Evolución PSS-10 y PCL-5', subtitle: 'KPI-01 y KPI-02', Icon: Activity },
-  { id: 'practicas', label: '2. Efectividad por Práctica', subtitle: 'KPI-05 · Meta operativa', Icon: Award },
-  { id: 'continuidad', label: '3. Continuidad y Abandono', subtitle: 'KPI-03 · Por estudiante', Icon: Users },
-  { id: 'cumplimiento', label: '4. Control de Evaluaciones', subtitle: 'KPI-04 · Cumplimiento', Icon: ClipboardCheck },
-  { id: 'operacion', label: 'Operación OLTP', subtitle: 'Captura en vivo SQL Server', Icon: Database },
+  { id: 'evolucion', label: 'RG-01 · Evolución PSS-10 y PCL-5', subtitle: 'KPI-01 y KPI-02', Icon: Activity },
+  { id: 'practicas', label: 'RG-02 · Efectividad por Práctica', subtitle: 'KPI-05 · Meta operativa', Icon: Award },
+  { id: 'continuidad', label: 'RO-01 · Continuidad y Abandono', subtitle: 'KPI-03 · Por estudiante', Icon: Users },
+  { id: 'cumplimiento', label: 'RO-02 · Control de Evaluaciones', subtitle: 'KPI-04 · Cumplimiento', Icon: ClipboardCheck },
+  { id: 'operacion', label: 'Operación OLTP & ETL', subtitle: 'Captura y Data Mart SQL Server', Icon: Database },
 ];
 
 export function DashboardApp() {
@@ -254,7 +254,13 @@ export function DashboardApp() {
           )}
 
           {/* OPERACIÓN TRANSACCIONAL OLTP */}
-          {seccion === 'operacion' && <OperacionView filtros={filtros} onDataMutated={handleDataMutated} />}
+          {seccion === 'operacion' && (
+            <OperacionView
+              filtros={filtros}
+              userRole={currentUser?.rol || ''}
+              onDataMutated={handleDataMutated}
+            />
+          )}
           {seccion === 'usuarios' && currentUser?.rol === 'ADMIN' && <AdminStudentAccounts onLogout={async () => { await api.logout(); setCurrentUser(null); setAuthState('signed-out'); }} />}
         </main>
       </div>

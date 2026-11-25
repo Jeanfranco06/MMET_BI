@@ -14,6 +14,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
+import { AiReportButton } from './AiReportButton';
 
 interface CumplimientoReportProps {
   filtros: FiltrosResponse | null;
@@ -151,17 +152,38 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
     <div className="space-y-5">
       {/* Encabezado y filtros propios del reporte */}
       <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">
-            Control de Evaluaciones Psicológicas Pendientes y Completadas
-          </h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
-            <strong className="text-slate-700">
-              {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
-            </strong>{' '}
-            · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              RO-02 · Control de Evaluaciones Psicológicas Pendientes y Completadas (KPI-04)
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
+              <strong className="text-slate-700">
+                {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
+              </strong>{' '}
+              · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
+            </p>
+          </div>
+          <AiReportButton
+            reporte="RO-02"
+            corte={data?.corte || corte}
+            disabled={loading || !rt}
+            filtros={{ semestre, idPrograma, facultad, instrumento, categoriaEvento, estado }}
+            kpis={
+              rt
+                ? {
+                    elegibles: rt.elegibles,
+                    completadas_en_ventana: rt.completadas_en_ventana,
+                    completadas_tardias: rt.completadas_tardias,
+                    pendientes_en_ventana: rt.pendientes_en_ventana,
+                    vencidas: rt.vencidas,
+                    tasa_cumplimiento_pct: rt.tasa_cumplimiento,
+                    semaforo: rt.semaforo,
+                  }
+                : null
+            }
+          />
         </div>
 
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

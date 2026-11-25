@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Calendar, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
+import { AiReportButton } from './AiReportButton';
 
 interface EfectividadPracticaReportProps {
   filtros: FiltrosResponse | null;
@@ -101,16 +102,43 @@ export function EfectividadPracticaReport({
     <div className="space-y-5">
       {/* Encabezado y filtros propios del reporte */}
       <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">
-            Comparativo de Efectividad y Cumplimiento de Meta por Práctica
-          </h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Instrumento:{' '}
-            <strong className="text-slate-700">{instrumento}</strong> · Referencia operativa:{' '}
-            <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte:{' '}
-            <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              RG-02 · Comparativo de Efectividad y Cumplimiento de Meta por Práctica (KPI-05)
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Instrumento:{' '}
+              <strong className="text-slate-700">{instrumento}</strong> · Referencia operativa:{' '}
+              <strong className="text-slate-700">≥ {metaPts.toFixed(1)} pts</strong> · Corte:{' '}
+              <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
+            </p>
+          </div>
+          <AiReportButton
+            reporte="RG-02"
+            corte={data?.corte || corte}
+            disabled={loading || !data}
+            filtros={{ semestre, instrumento, facultad: facultad || 'TODAS', vista }}
+            kpis={
+              kpi05
+                ? {
+                    instrumento,
+                    meta_operativa_pts: metaPts,
+                    practicas_evaluables: kpi05.practicas_evaluables,
+                    practicas_cumplen_meta: kpi05.practicas_cumplen_meta,
+                    tasa_cumplimiento_meta_pct: kpi05.tasa_cumplimiento_meta,
+                    semaforo: kpi05.semaforo,
+                  }
+                : null
+            }
+            grupos={filas.map((r: any) => ({
+              nombre: vista === 'practica' ? `${r.codigo_practica} · ${r.nombre_practica}` : r.codigo_programa,
+              n: Number(r.pares_validos || 0),
+              instrumento,
+              valor: r.reduccion_promedio,
+              semaforo: r.semaforo,
+            }))}
+          />
         </div>
 
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

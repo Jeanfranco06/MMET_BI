@@ -205,4 +205,83 @@ export const api = {
     estado_asistencia: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
     minutos_asistidos?: number;
   }) => apiPost<{ ok: boolean; mensaje: string }>('/operacion/asistencias', body),
+  crearSesion: (body: {
+    id_programa: number;
+    numero_sesion: number;
+    id_practica_tecnica: number;
+    modalidad: 'PRESENCIAL' | 'VIRTUAL' | 'HIBRIDA';
+    duracion_programada_min: number;
+    fecha_sesion: string;
+    hora_inicio?: string;
+    estado_sesion?: 'PROGRAMADA' | 'REALIZADA';
+  }) => apiPost<{ ok: boolean; mensaje: string; sesion: any }>('/operacion/sesiones', body),
+  corregirEvaluacion: (
+    idOportunidad: number,
+    body: {
+      respuestas: Array<{ numero_item: number; valor: number }>;
+      fecha_realizacion: string;
+      motivo_correccion: string;
+    },
+  ) => apiPost<any>(`/evaluacion/admin/${idOportunidad}/corregir`, body),
+  ejecutarEtl: (fecha_corte?: string) =>
+    apiPost<{
+      ok: boolean;
+      ejecucion: {
+        id_ejecucion_etl: number;
+        fecha_corte: string;
+        inicio_ejecucion: string;
+        fin_ejecucion: string;
+        estado: string;
+        filas_continuidad: number;
+        filas_cumplimiento: number;
+        filas_resultados: number;
+        incidencias_detectadas: number;
+        mensaje: string;
+      } | null;
+      incidencias: any[];
+    }>('/operacion/etl/ejecutar', fecha_corte ? { fecha_corte } : {}),
+  interpretarEvaluacion: (body: {
+    instrumento: 'PSS-10' | 'PCL-5';
+    puntaje_total: number;
+    momento: 'INICIAL' | 'FINAL';
+    puntaje_inicial_previo?: number;
+    codigo_practica?: string;
+    nombre_practica?: string;
+  }) =>
+    apiPost<{
+      instrumento: 'PSS-10' | 'PCL-5';
+      momento: 'INICIAL' | 'FINAL';
+      puntaje_total: number;
+      escala_maxima: number;
+      variacion_vs_inicial: number | null;
+      resumen_preliminar: string;
+      observaciones_clave: string[];
+      sugerencias_seguimiento: string[];
+      disclaimer: string;
+      modelo: string;
+      fuente: 'llm_externo' | 'fallback_reglas';
+    }>('/ai/interpretar-evaluacion', body),
+  interpretarReporte: (body: {
+    reporte: 'RO-01' | 'RO-02' | 'RG-01' | 'RG-02';
+    corte: string;
+    filtros?: Record<string, any>;
+    kpis: Record<string, any>;
+    grupos?: Array<{
+      nombre: string;
+      n: number;
+      instrumento?: 'PSS-10' | 'PCL-5';
+      valor?: number | null;
+      semaforo?: string;
+    }>;
+  }) =>
+    apiPost<{
+      reporte: 'RO-01' | 'RO-02' | 'RG-01' | 'RG-02';
+      corte: string;
+      hechos_observados: string[];
+      lectura_semaforos: string[];
+      recomendaciones_gestion: string[];
+      nota_metodologica: string;
+      modelo: string;
+      fuente: 'llm_externo' | 'fallback_reglas';
+    }>('/ai/interpretar-reporte', body),
 };

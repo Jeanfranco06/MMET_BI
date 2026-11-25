@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Info, X } from 'lucide-react';
 import { api, type FiltrosResponse } from '@/lib/api';
+import { AiReportButton } from './AiReportButton';
 
 interface EvolucionReportProps {
   filtros: FiltrosResponse | null;
@@ -130,17 +131,48 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
     <div className="space-y-5">
       {/* Encabezado y filtros propios del reporte */}
       <section className="bg-white rounded-xl border border-slate-200 p-5">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">
-            Evolución del Estrés Percibido (PSS-10) y Síntomas Postraumáticos (PCL-5)
-          </h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
-            <strong className="text-slate-700">
-              {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
-            </strong>{' '}
-            · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              RG-01 · Evolución del Estrés Percibido (PSS-10) y Síntomas Postraumáticos (PCL-5)
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Semestre: <strong className="text-slate-700">{semestre || 'Todos'}</strong> · Programa:{' '}
+              <strong className="text-slate-700">
+                {programaSeleccionado ? programaSeleccionado.codigo_programa : 'Todos los programas'}
+              </strong>{' '}
+              · Corte: <strong className="text-slate-700">{formatFechaEs(corte)}</strong>
+            </p>
+          </div>
+          <AiReportButton
+            reporte="RG-01"
+            corte={data?.corte || corte}
+            disabled={loading || !data}
+            filtros={{ semestre, facultad, idPractica, idPrograma, instrumento, agruparPor }}
+            kpis={
+              data
+                ? Object.fromEntries(
+                    totales.map((t) => [
+                      t.codigo_instrumento,
+                      {
+                        pares_validos: t.pares_validos,
+                        promedio_inicial: t.promedio_inicial,
+                        promedio_final: t.promedio_final,
+                        reduccion_promedio: t.reduccion_promedio,
+                        semaforo: t.semaforo,
+                      },
+                    ]),
+                  )
+                : null
+            }
+            grupos={(data?.filas || []).map((r: any) => ({
+              nombre: `${r.codigo_instrumento} · ${r.dim_clave}`,
+              n: Number(r.pares_validos || 0),
+              instrumento: r.codigo_instrumento,
+              valor: r.reduccion_promedio,
+              semaforo: r.semaforo,
+            }))}
+          />
         </div>
 
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

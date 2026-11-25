@@ -322,3 +322,23 @@ body {
 .mwg-field :is(input, select, textarea):user-valid {
   border-color: var(--success);
 }
+
+/* ============================================================================
+   MODERN WEB GUIDANCE: dialog + light-dismiss-a-dialog
+   ============================================================================ */
+dialog:modal {
+  overscroll-behavior: contain;
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  max-width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+}
+
+dialog::backdrop {
+  background-color: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(2px);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
