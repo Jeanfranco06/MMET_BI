@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Award,
+  BarChart3,
   Calendar,
   ChevronRight,
   ClipboardCheck,
@@ -23,6 +24,7 @@ import { api, type FiltrosResponse } from '@/lib/api';
 import { BrandLogo } from './BrandLogo';
 import { LoginScreen } from './LoginScreen';
 import { ResumenEjecutivoView } from './ResumenEjecutivoView';
+import { TableroVisualView } from './TableroVisualView';
 import { EvolucionReport } from './EvolucionReport';
 import { EfectividadPracticaReport } from './EfectividadPracticaReport';
 import { ContinuidadReport } from './ContinuidadReport';
@@ -33,6 +35,7 @@ import { AdminStudentAccounts } from './AdminStudentAccounts';
 
 type SeccionId =
   | 'resumen'
+  | 'tablero'
   | 'evolucion'
   | 'practicas'
   | 'continuidad'
@@ -56,14 +59,22 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Resumen Ejecutivo',
     shortLabel: 'Resumen',
     subtitle: 'KPI-01 a KPI-05',
-    section: 'Inicio',
+    section: 'Analítica BI',
     Icon: LayoutDashboard,
+  },
+  {
+    id: 'tablero',
+    label: 'Tablero Visual BI',
+    shortLabel: 'Tablero BI',
+    subtitle: 'Gráficos · Cross-Filter',
+    section: 'Analítica BI',
+    Icon: BarChart3,
   },
   {
     id: 'evolucion',
     label: 'RG-01 · Evolución Estrés y Trauma',
     shortLabel: 'RG-01 · Evolución',
-    subtitle: 'KPI-01 · KPI-02',
+    subtitle: 'KPI-01 · KPI-02 · Tabla',
     section: 'Reportes Gerenciales',
     Icon: Activity,
   },
@@ -71,7 +82,7 @@ const NAV_ITEMS: NavItem[] = [
     id: 'practicas',
     label: 'RG-02 · Efectividad por Práctica',
     shortLabel: 'RG-02 · Prácticas',
-    subtitle: 'KPI-05 · Meta operativa',
+    subtitle: 'KPI-05 · Tabla',
     section: 'Reportes Gerenciales',
     Icon: Award,
   },
@@ -79,7 +90,7 @@ const NAV_ITEMS: NavItem[] = [
     id: 'continuidad',
     label: 'RO-01 · Continuidad y Abandono',
     shortLabel: 'RO-01 · Continuidad',
-    subtitle: 'KPI-03 · Por estudiante',
+    subtitle: 'KPI-03 · Tabla',
     section: 'Reportes Operativos',
     Icon: Users,
   },
@@ -87,7 +98,7 @@ const NAV_ITEMS: NavItem[] = [
     id: 'cumplimiento',
     label: 'RO-02 · Control de Evaluaciones',
     shortLabel: 'RO-02 · Evaluaciones',
-    subtitle: 'KPI-04 · Cumplimiento',
+    subtitle: 'KPI-04 · Tabla',
     section: 'Reportes Operativos',
     Icon: ClipboardCheck,
   },
@@ -518,7 +529,7 @@ export function DashboardApp() {
                 />
               </label>
 
-              {seccion === 'resumen' && (
+              {(seccion === 'resumen' || seccion === 'tablero') && (
                 <>
                   <label className="block min-w-[170px]">
                     <span className="block text-[11px] font-semibold text-slate-500 mb-1">Facultad / Área</span>
@@ -586,6 +597,19 @@ export function DashboardApp() {
               practicaGlobal={practicaGlobal}
               programaGlobal={programaGlobal}
               onNavigate={(target) => setSeccion(target)}
+            />
+          )}
+
+          {seccion === 'tablero' && (
+            <TableroVisualView
+              key={`tab-${refreshTick}`}
+              filtros={filtros}
+              corte={corte}
+              semestre={semestre}
+              facultadGlobal={facultadGlobal}
+              practicaGlobal={practicaGlobal}
+              programaGlobal={programaGlobal}
+              onNavigateReport={(target) => setSeccion(target)}
             />
           )}
 

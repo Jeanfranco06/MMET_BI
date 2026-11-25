@@ -69,7 +69,7 @@ export interface FiltrosResponse {
   gruposEtarios: string[];
   sexos: string[];
   categoriasEvento?: Array<{
-    id_categoria_evento: number;
+    id_categoria_evento?: number;
     codigo_categoria: string;
     nombre_categoria: string;
   }>;
