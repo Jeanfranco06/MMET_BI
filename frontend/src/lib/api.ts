@@ -1,5 +1,11 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
+function csrfHeader(): Record<string, string> {
+  if (typeof document === 'undefined') return {};
+  const item = document.cookie.split(';').map((part) => part.trim()).find((part) => part.startsWith('mmet_csrf='));
+  return item ? { 'X-CSRF-Token': decodeURIComponent(item.slice('mmet_csrf='.length)) } : {};
+}
+
 async function apiGet<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
   const url = new URL(`${API_BASE}${path}`);
   if (params) {
@@ -7,7 +13,7 @@ async function apiGet<T>(path: string, params?: Record<string, string | number |
       if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     });
   }
-  const res = await fetch(url.toString(), { cache: 'no-store' });
+  const res = await fetch(url.toString(), { cache: 'no-store', credentials: 'include' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(err.message || `Error ${res.status}`);
@@ -18,13 +24,21 @@ async function apiGet<T>(path: string, params?: Record<string, string | number |
 async function apiPost<T>(path: string, body: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...csrfHeader() },
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(Array.isArray(data.message) ? data.message.join(', ') : data.message || `Error ${res.status}`);
   }
+  return data as T;
+}
+
+async function apiPut<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json', ...csrfHeader() }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(Array.isArray(data.message) ? data.message.join(', ') : data.message || `Error ${res.status}`);
   return data as T;
 }
 
@@ -125,6 +139,16 @@ export interface ResumenResponse {
 }
 
 export const api = {
+  login: (body: { username: string; password: string }) => apiPost<{ user: any }>('/auth/login', body),
+  logout: () => apiPost<{ ok: boolean }>('/auth/logout', {}),
+  me: () => apiGet<{ id_usuario: number; id_estudiante: number | null; nombre_usuario: string; rol: string }>('/auth/me'),
+  getStudentsReadyForAccount: () => apiGet<Array<{ id_estudiante: number; codigo_anonimizado: string; evaluaciones_disponibles: number }>>('/auth/students-ready-for-account'),
+  createStudentUser: (body: { username: string; password: string; studentId: number }) =>
+    apiPost<{ ok: boolean }>('/auth/users', { ...body, role: 'ESTUDIANTE' }),
+  getMyEvaluations: () => apiGet<any[]>('/estudiante/evaluaciones'),
+  getMyEvaluation: (id: number) => apiGet<any>(`/estudiante/evaluaciones/${id}`),
+  saveMyEvaluationDraft: (id: number, respuestas: Array<{ numero_item: number; valor: number }>) => apiPut<any>(`/estudiante/evaluaciones/${id}/borrador`, { respuestas }),
+  submitMyEvaluation: (id: number, respuestas: Array<{ numero_item: number; valor: number }>, fecha_realizacion: string) => apiPost<any>(`/estudiante/evaluaciones/${id}/enviar`, { respuestas, fecha_realizacion }),
   getFiltros: () => apiGet<FiltrosResponse>('/analytics/filtros'),
   getResumen: (params: { corte: string; id_programa?: string; id_practica?: string; facultad?: string }) =>
     apiGet<ResumenResponse>('/analytics/resumen', params),
@@ -181,10 +205,4 @@ export const api = {
     estado_asistencia: 'ASISTIO' | 'INASISTENCIA' | 'RETIRO_BAJA';
     minutos_asistidos?: number;
   }) => apiPost<{ ok: boolean; mensaje: string }>('/operacion/asistencias', body),
-  registrarResultado: (body: {
-    id_oportunidad: number;
-    puntaje_total: number;
-    fecha_realizacion: string;
-    motivo_correccion?: string;
-  }) => apiPost<{ ok: boolean; version: number; en_ventana: boolean; mensaje: string }>('/operacion/resultados', body),
 };
