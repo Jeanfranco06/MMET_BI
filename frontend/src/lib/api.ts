@@ -1,4 +1,6 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== 'undefined' ? '/api' : 'http://127.0.0.1:4000/api');
 
 function csrfHeader(): Record<string, string> {
   if (typeof document === 'undefined') return {};
@@ -7,7 +9,8 @@ function csrfHeader(): Record<string, string> {
 }
 
 async function apiGet<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000';
+  const url = new URL(`${API_BASE}${path}`, origin);
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
