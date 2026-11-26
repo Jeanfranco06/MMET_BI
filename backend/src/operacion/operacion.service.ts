@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { EtlService } from '../database/etl.service';
 import { DatabaseService } from '../database/database.service';
 import {
   CrearAsignacionDto,
@@ -11,7 +12,7 @@ import {
 
 @Injectable()
 export class OperacionService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly db: DatabaseService, private readonly etl: EtlService) {}
 
   async getEstudiantes(f: { buscar?: string; facultad?: string; page?: number; pageSize?: number }) {
     const page = f.page ?? 1;
@@ -55,7 +56,7 @@ export class OperacionService {
           e.carrera,
           e.ciclo_academico,
           COUNT(a.id_asignacion) AS programas_inscritos,
-          ISNULL(STRING_AGG(p.codigo_programa, N', '), N'') AS programas_codigos
+          COALESCE(STRING_AGG(p.codigo_programa, ', '), '') AS programas_codigos
         FROM dbo.estudiantes e
         LEFT JOIN dbo.asignaciones a ON a.id_estudiante = e.id_estudiante
         LEFT JOIN dbo.programas p ON p.id_programa = a.id_programa
@@ -72,7 +73,7 @@ export class OperacionService {
           e.carrera,
           e.ciclo_academico
         ORDER BY e.id_estudiante DESC
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        LIMIT @pageSize OFFSET @offset
         `,
         params,
       ),
@@ -114,10 +115,9 @@ export class OperacionService {
 
     const dup = await this.db.query<{ codigo_estudiante: string; correo_institucional: string }>(
       `
-      SELECT TOP 1 codigo_estudiante, correo_institucional
+      SELECT codigo_estudiante, correo_institucional
       FROM dbo.estudiantes
-      WHERE codigo_estudiante = @codigo OR LOWER(correo_institucional) = @correo
-      `,
+      WHERE codigo_estudiante = @codigo OR LOWER(correo_institucional) = @correo LIMIT 1`,
       { codigo, correo },
     );
     if (dup.length > 0) {
@@ -129,27 +129,7 @@ export class OperacionService {
 
     try {
       const inserted = await this.db.query<any>(
-        `
-        INSERT INTO dbo.estudiantes (
-          codigo_estudiante, nombres, apellidos, correo_institucional,
-          edad_anios, sexo_codificado, facultad_o_area, carrera, ciclo_academico
-        )
-        OUTPUT
-          INSERTED.id_estudiante,
-          INSERTED.codigo_estudiante,
-          INSERTED.nombres,
-          INSERTED.apellidos,
-          INSERTED.correo_institucional,
-          INSERTED.edad_anios,
-          INSERTED.sexo_codificado,
-          INSERTED.facultad_o_area,
-          INSERTED.carrera,
-          INSERTED.ciclo_academico
-        VALUES (
-          @codigo, @nombres, @apellidos, @correo,
-          @edad, @sexo, @facultad, @carrera, @ciclo
-        );
-        `,
+        `INSERT INTO dbo.estudiantes(codigo_estudiante,nombres,apellidos,correo_institucional,edad_anios,sexo_codificado,facultad_o_area,carrera,ciclo_academico) VALUES(@codigo,@nombres,@apellidos,@correo,@edad,@sexo,@facultad,@carrera,@ciclo) RETURNING *`,
         {
           codigo,
           nombres,
@@ -169,10 +149,10 @@ export class OperacionService {
         estudiante: inserted[0],
       };
     } catch (err: any) {
-      if (err?.number === 2627 || err?.number === 2601) {
+      if (err?.code === '23505') {
         throw new ConflictException('El código de estudiante o el correo institucional ya se encuentran registrados.');
       }
-      throw new BadRequestException(err?.message || 'Error al registrar el estudiante en SQL Server.');
+      throw new BadRequestException(err?.message || 'Error al registrar el estudiante en PostgreSQL.');
     }
   }
 
@@ -189,10 +169,10 @@ export class OperacionService {
           codigo_programa,
           nombre_programa,
           estado_programa,
-          CONVERT(VARCHAR(10), ventana_inicial_inicio, 23) AS ventana_inicial_inicio,
-          CONVERT(VARCHAR(10), ventana_inicial_fin, 23) AS ventana_inicial_fin,
-          CONVERT(VARCHAR(10), ventana_final_inicio, 23) AS ventana_final_inicio,
-          CONVERT(VARCHAR(10), ventana_final_fin, 23) AS ventana_final_fin
+          to_char(ventana_inicial_inicio, 'YYYY-MM-DD') AS ventana_inicial_inicio,
+          to_char(ventana_inicial_fin, 'YYYY-MM-DD') AS ventana_inicial_fin,
+          to_char(ventana_final_inicio, 'YYYY-MM-DD') AS ventana_final_inicio,
+          to_char(ventana_final_fin, 'YYYY-MM-DD') AS ventana_final_fin
         FROM dbo.programas
         WHERE id_programa = @id
         `,
@@ -244,26 +224,14 @@ export class OperacionService {
       reqIns.input('idProg', dto.id_programa);
       reqIns.input('fecha', fechaInscripcion);
       const insRes = await reqIns.query(`
-        SET NOCOUNT ON;
-        DECLARE @nueva TABLE (id_asignacion BIGINT);
-        INSERT INTO dbo.asignaciones (id_estudiante, id_programa, fecha_inscripcion, estado_asignacion)
-        OUTPUT INSERTED.id_asignacion INTO @nueva
-        VALUES (@idEst, @idProg, CAST(@fecha AS DATE), N'INSCRITO');
-
-        DECLARE @idAsig BIGINT = (SELECT TOP 1 id_asignacion FROM @nueva);
-
-        INSERT INTO dbo.historial_estados_asignacion (
-          id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
-        )
-        VALUES (@idAsig, NULL, N'INSCRITO', CAST(@fecha AS DATE), N'INSCRIPCION_DIRECTA');
-
-        SELECT
-          @idAsig AS id_asignacion,
-          @idEst AS id_estudiante,
-          @idProg AS id_programa,
-          @fecha AS fecha_inscripcion,
-          N'INSCRITO' AS estado_asignacion;
-      `);
+WITH nueva AS (
+ INSERT INTO dbo.asignaciones(id_estudiante,id_programa,fecha_inscripcion,estado_asignacion)
+ VALUES(@idEst,@idProg,CAST(@fecha AS DATE),'INSCRITO') RETURNING *
+), historial AS (
+ INSERT INTO dbo.historial_estados_asignacion(id_asignacion,estado_anterior,estado_nuevo,fecha_efectiva,motivo_codigo)
+ SELECT id_asignacion,NULL,'INSCRITO',fecha_inscripcion,'INSCRIPCION_DIRECTA' FROM nueva
+) SELECT * FROM nueva
+`);
 
       const asignacion = insRes.recordset?.[0];
       let oportunidadesGeneradas = 0;
@@ -279,39 +247,17 @@ export class OperacionService {
         reqOps.input('vfFin', prog.ventana_final_fin);
 
         const opsRes = await reqOps.query(`
-          SET NOCOUNT ON;
-          DECLARE @idInstr SMALLINT = (
-            SELECT TOP 1 id_instrumento
-            FROM dbo.cat_instrumentos
-            WHERE codigo_instrumento = N'PSS-10' AND activo = 1
-            ORDER BY id_instrumento ASC
-          );
-          DECLARE @idVer BIGINT = (
-            SELECT TOP 1 id_version_instrumento
-            FROM dbo.instrumento_versiones
-            WHERE id_instrumento = @idInstr AND estado_contenido = N'PUBLICADO'
-            ORDER BY id_version_instrumento DESC
-          );
-
-          IF @idInstr IS NOT NULL
-          BEGIN
-            INSERT INTO dbo.oportunidades_evaluacion (
-              id_asignacion, id_estudiante, id_programa, id_instrumento, codigo_instrumento,
-              id_evento_indice, momento, fecha_ventana_inicio, fecha_ventana_fin, fecha_prevista,
-              aplicable, id_version_instrumento
-            )
-            VALUES
-              (@idAsig, @idEst, @idProg, @idInstr, N'PSS-10', NULL, N'INICIAL',
-               CAST(@viIni AS DATE), CAST(@viFin AS DATE), CAST(@viFin AS DATE), 1, @idVer),
-              (@idAsig, @idEst, @idProg, @idInstr, N'PSS-10', NULL, N'FINAL',
-               CAST(@vfIni AS DATE), CAST(@vfFin AS DATE), CAST(@vfIni AS DATE), 1, @idVer);
-            SELECT 2 AS generadas;
-          END
-          ELSE
-          BEGIN
-            SELECT 0 AS generadas;
-          END
-        `);
+WITH instrumento AS (
+ SELECT i.id_instrumento, v.id_version_instrumento FROM dbo.cat_instrumentos i
+ LEFT JOIN LATERAL (SELECT id_version_instrumento FROM dbo.instrumento_versiones WHERE id_instrumento=i.id_instrumento AND estado_contenido='PUBLICADO' ORDER BY id_version_instrumento DESC LIMIT 1) v ON true
+ WHERE i.codigo_instrumento='PSS-10' AND i.activo=1 ORDER BY i.id_instrumento LIMIT 1
+), nuevas AS (
+ INSERT INTO dbo.oportunidades_evaluacion(id_asignacion,id_estudiante,id_programa,id_instrumento,codigo_instrumento,id_evento_indice,momento,fecha_ventana_inicio,fecha_ventana_fin,fecha_prevista,aplicable,id_version_instrumento)
+ SELECT @idAsig,@idEst,@idProg,i.id_instrumento,'PSS-10',NULL,d.momento,d.inicio,d.fin,d.prevista,1,i.id_version_instrumento
+ FROM instrumento i CROSS JOIN (VALUES('INICIAL',CAST(@viIni AS DATE),CAST(@viFin AS DATE),CAST(@viFin AS DATE)),('FINAL',CAST(@vfIni AS DATE),CAST(@vfFin AS DATE),CAST(@vfIni AS DATE))) AS d(momento,inicio,fin,prevista)
+ RETURNING id_oportunidad
+) SELECT count(*) AS generadas FROM nuevas
+`);
         oportunidadesGeneradas = Number(opsRes.recordset?.[0]?.generadas || 0);
       }
 
@@ -328,12 +274,12 @@ export class OperacionService {
       };
     } catch (err: any) {
       await tx.rollback();
-      if (err?.number === 2627 || err?.number === 2601) {
+      if (err?.code === '23505') {
         throw new ConflictException(
           `El estudiante ${estRows[0].codigo_estudiante} ya se encuentra inscrito en ${prog.codigo_programa}.`,
         );
       }
-      throw new BadRequestException(err?.message || 'Error al registrar la inscripción en SQL Server.');
+      throw new BadRequestException(err?.message || 'Error al registrar la inscripción en PostgreSQL.');
     }
   }
 
@@ -351,8 +297,7 @@ export class OperacionService {
   async getEventosIndice(f: { idEstudiante?: number; codigoEstudiante?: string }) {
     const rows = await this.db.query(
       `
-      SELECT TOP 60
-        ev.id_evento_indice,
+      SELECT ev.id_evento_indice,
         ev.id_estudiante,
         e.codigo_estudiante,
         e.nombres,
@@ -372,8 +317,7 @@ export class OperacionService {
       JOIN dbo.cat_categorias_evento_indice c ON c.id_categoria_evento = ev.id_categoria_evento
       WHERE (@idEst IS NULL OR ev.id_estudiante = @idEst)
         AND (@codEst IS NULL OR e.codigo_estudiante LIKE @codEst)
-      ORDER BY ev.creado_en DESC, ev.id_evento_indice DESC
-      `,
+      ORDER BY ev.creado_en DESC, ev.id_evento_indice DESC LIMIT 60`,
       {
         idEst: f.idEstudiante ?? null,
         codEst: f.codigoEstudiante ? `%${f.codigoEstudiante}%` : null,
@@ -433,43 +377,7 @@ export class OperacionService {
 
     try {
       const inserted = await this.db.query<any>(
-        `
-        SET NOCOUNT ON;
-        DECLARE @nuevo TABLE (id_evento_indice BIGINT);
-        INSERT INTO dbo.eventos_indice (
-          id_estudiante, id_categoria_evento, codigo_evento_local,
-          anio_ocurrencia_aprox, descripcion_evento,
-          antecedente_clinico_externo, requiere_derivacion, vigente
-        )
-        OUTPUT INSERTED.id_evento_indice INTO @nuevo
-        VALUES (
-          @idEst, @idCat, @codigo,
-          NULLIF(@anio, 0), NULLIF(@desc, N''),
-          @antExt, @reqDer, 1
-        );
-
-        DECLARE @idNuevo BIGINT = (SELECT TOP 1 id_evento_indice FROM @nuevo);
-        SELECT
-          ev.id_evento_indice,
-          ev.id_estudiante,
-          e.codigo_estudiante,
-          e.nombres,
-          e.apellidos,
-          ev.id_categoria_evento,
-          c.codigo_categoria,
-          c.nombre_categoria,
-          ev.codigo_evento_local,
-          ev.anio_ocurrencia_aprox,
-          ev.descripcion_evento,
-          ev.antecedente_clinico_externo,
-          ev.requiere_derivacion,
-          ev.vigente,
-          ev.creado_en
-        FROM dbo.eventos_indice ev
-        JOIN dbo.estudiantes e ON e.id_estudiante = ev.id_estudiante
-        JOIN dbo.cat_categorias_evento_indice c ON c.id_categoria_evento = ev.id_categoria_evento
-        WHERE ev.id_evento_indice = @idNuevo;
-        `,
+        `WITH nuevo AS (INSERT INTO dbo.eventos_indice(id_estudiante,id_categoria_evento,codigo_evento_local,anio_ocurrencia_aprox,descripcion_evento,antecedente_clinico_externo,requiere_derivacion,vigente) VALUES(@idEst,@idCat,@codigo,NULLIF(@anio,0),NULLIF(@desc,''),@antExt,@reqDer,1) RETURNING *) SELECT ev.*,e.codigo_estudiante,e.nombres,e.apellidos,c.codigo_categoria,c.nombre_categoria FROM nuevo ev JOIN dbo.estudiantes e USING(id_estudiante) JOIN dbo.cat_categorias_evento_indice c USING(id_categoria_evento)`,
         {
           idEst: dto.id_estudiante,
           idCat: dto.id_categoria_evento,
@@ -487,15 +395,14 @@ export class OperacionService {
         evento: inserted[0],
       };
     } catch (err: any) {
-      throw new BadRequestException(err?.message || 'Error al registrar el evento índice en SQL Server.');
+      throw new BadRequestException(err?.message || 'Error al registrar el evento índice en PostgreSQL.');
     }
   }
 
   async getSesiones(idPrograma?: number) {
     return this.db.query(
       `
-      SELECT TOP 200
-        s.id_sesion,
+      SELECT s.id_sesion,
         s.id_programa,
         p.codigo_programa,
         s.numero_sesion,
@@ -503,16 +410,15 @@ export class OperacionService {
         cp.nombre_practica,
         s.modalidad,
         s.duracion_programada_min,
-        CONVERT(VARCHAR(10), s.fecha_sesion, 23) AS fecha_sesion,
+        to_char(s.fecha_sesion, 'YYYY-MM-DD') AS fecha_sesion,
         s.estado_sesion,
-        (SELECT COUNT(*) FROM dbo.asistencias a WHERE a.id_sesion = s.id_sesion AND a.estado_asistencia = N'ASISTIO') AS total_asistieron,
-        (SELECT COUNT(*) FROM dbo.asistencias a WHERE a.id_sesion = s.id_sesion AND a.estado_asistencia = N'INASISTENCIA') AS total_faltaron
+        (SELECT COUNT(*) FROM dbo.asistencias a WHERE a.id_sesion = s.id_sesion AND a.estado_asistencia = 'ASISTIO') AS total_asistieron,
+        (SELECT COUNT(*) FROM dbo.asistencias a WHERE a.id_sesion = s.id_sesion AND a.estado_asistencia = 'INASISTENCIA') AS total_faltaron
       FROM dbo.sesiones s
       JOIN dbo.programas p ON p.id_programa = s.id_programa
       JOIN dbo.cat_practicas cp ON cp.id_practica = s.id_practica_tecnica
       WHERE (@idPrograma IS NULL OR s.id_programa = @idPrograma)
-      ORDER BY s.id_programa, s.numero_sesion
-      `,
+      ORDER BY s.id_programa, s.numero_sesion LIMIT 200`,
       { idPrograma: idPrograma ?? null },
     );
   }
@@ -530,7 +436,7 @@ export class OperacionService {
         cp.nombre_practica,
         s.modalidad,
         s.duracion_programada_min,
-        CONVERT(VARCHAR(10), s.fecha_sesion, 23) AS fecha_sesion,
+        to_char(s.fecha_sesion, 'YYYY-MM-DD') AS fecha_sesion,
         s.estado_sesion
       FROM dbo.sesiones s
       JOIN dbo.programas p ON p.id_programa = s.id_programa
@@ -556,8 +462,8 @@ export class OperacionService {
         e.facultad_o_area,
         e.carrera,
         asig.estado_asignacion,
-        CONVERT(VARCHAR(10), asig.fecha_retiro, 23) AS fecha_retiro,
-        ISNULL(asis.estado_asistencia, N'PENDIENTE') AS estado,
+        to_char(asig.fecha_retiro, 'YYYY-MM-DD') AS fecha_retiro,
+        COALESCE(asis.estado_asistencia, 'PENDIENTE') AS estado,
         asis.minutos_asistidos
       FROM dbo.asignaciones asig
       JOIN dbo.estudiantes e ON e.id_estudiante = asig.id_estudiante
@@ -597,8 +503,7 @@ export class OperacionService {
   async getOportunidadesAbiertas(idPrograma?: number) {
     return this.db.query(
       `
-      SELECT TOP 50
-        op.id_oportunidad,
+      SELECT op.id_oportunidad,
         op.id_asignacion,
         e.codigo_estudiante,
         e.nombres,
@@ -606,23 +511,22 @@ export class OperacionService {
         p.codigo_programa,
         op.codigo_instrumento,
         op.momento,
-        CONVERT(VARCHAR(10), op.fecha_ventana_inicio, 23) AS fecha_ventana_inicio,
-        CONVERT(VARCHAR(10), op.fecha_ventana_fin, 23) AS fecha_ventana_fin,
+        to_char(op.fecha_ventana_inicio, 'YYYY-MM-DD') AS fecha_ventana_inicio,
+        to_char(op.fecha_ventana_fin, 'YYYY-MM-DD') AS fecha_ventana_fin,
         r.id_resultado,
         r.numero_version,
         r.puntaje_total,
-        CONVERT(VARCHAR(10), r.fecha_realizacion, 23) AS fecha_realizacion,
+        to_char(r.fecha_realizacion, 'YYYY-MM-DD') AS fecha_realizacion,
         r.en_ventana
       FROM dbo.oportunidades_evaluacion op
       JOIN dbo.estudiantes e ON e.id_estudiante = op.id_estudiante
       JOIN dbo.programas p ON p.id_programa = op.id_programa
       LEFT JOIN dbo.resultados_evaluacion r
         ON r.id_oportunidad = op.id_oportunidad
-       AND r.es_vigente = 1 AND r.estado_validez = N'VALIDO'
+       AND r.es_vigente = 1 AND r.estado_validez = 'VALIDO'
       WHERE op.aplicable = 1
         AND (@idPrograma IS NULL OR op.id_programa = @idPrograma)
-      ORDER BY CASE WHEN r.id_resultado IS NULL THEN 0 ELSE 1 END, op.fecha_ventana_fin ASC
-      `,
+      ORDER BY CASE WHEN r.id_resultado IS NULL THEN 0 ELSE 1 END, op.fecha_ventana_fin ASC LIMIT 50`,
       { idPrograma: idPrograma ?? null },
     );
   }
@@ -641,7 +545,7 @@ export class OperacionService {
           id_programa,
           estado_sesion,
           duracion_programada_min,
-          CONVERT(VARCHAR(10), fecha_sesion, 23) AS fecha_sesion
+          to_char(fecha_sesion, 'YYYY-MM-DD') AS fecha_sesion
         FROM dbo.sesiones
         WHERE id_sesion = @id
         `,
@@ -653,8 +557,8 @@ export class OperacionService {
           id_asignacion,
           id_programa,
           estado_asignacion,
-          CONVERT(VARCHAR(10), fecha_inscripcion, 23) AS fecha_inscripcion,
-          CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro
+          to_char(fecha_inscripcion, 'YYYY-MM-DD') AS fecha_inscripcion,
+          to_char(fecha_retiro, 'YYYY-MM-DD') AS fecha_retiro
         FROM dbo.asignaciones
         WHERE id_asignacion = @idAsig
         `,
@@ -692,66 +596,26 @@ export class OperacionService {
       req.input('fechaSes', ses.fecha_sesion);
 
       const res = await req.query(`
-        SET NOCOUNT ON;
-
-        MERGE dbo.asistencias AS target
-        USING (SELECT @idAsig AS id_asignacion, @idSes AS id_sesion) AS src
-          ON target.id_asignacion = src.id_asignacion AND target.id_sesion = src.id_sesion
-        WHEN MATCHED THEN
-          UPDATE SET estado_asistencia = @estado, minutos_asistidos = @mins, actualizado_en = SYSDATETIMEOFFSET()
-        WHEN NOT MATCHED THEN
-          INSERT (id_programa, id_asignacion, id_sesion, estado_asistencia, minutos_asistidos)
-          VALUES (@idProg, @idAsig, @idSes, @estado, @mins);
-
-        DECLARE @estadoAsigPrev NVARCHAR(20) = (
-          SELECT estado_asignacion FROM dbo.asignaciones WHERE id_asignacion = @idAsig
-        );
-        DECLARE @fechaInsc DATE = (
-          SELECT fecha_inscripcion FROM dbo.asignaciones WHERE id_asignacion = @idAsig
-        );
-        DECLARE @fechaEfectiva DATE = CASE
-          WHEN CAST(@fechaSes AS DATE) >= @fechaInsc THEN CAST(@fechaSes AS DATE)
-          ELSE @fechaInsc
-        END;
-
-        IF @estado = N'RETIRO_BAJA'
-        BEGIN
-          UPDATE dbo.asignaciones
-             SET estado_asignacion    = N'RETIRADO',
-                 fecha_retiro         = ISNULL(fecha_retiro, @fechaEfectiva),
-                 motivo_retiro_codigo = ISNULL(motivo_retiro_codigo, N'RETIRO_EN_SESION'),
-                 actualizado_en       = SYSDATETIMEOFFSET()
-           WHERE id_asignacion = @idAsig;
-
-          IF @estadoAsigPrev <> N'RETIRADO'
-          BEGIN
-            INSERT INTO dbo.historial_estados_asignacion (
-              id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
-            )
-            VALUES (@idAsig, @estadoAsigPrev, N'RETIRADO', @fechaEfectiva, N'RETIRO_EN_SESION');
-          END
-        END
-        ELSE IF @estadoAsigPrev = N'RETIRADO'
-        BEGIN
-          UPDATE dbo.asignaciones
-             SET estado_asignacion    = N'ACTIVO',
-                 fecha_retiro         = NULL,
-                 motivo_retiro_codigo = NULL,
-                 actualizado_en       = SYSDATETIMEOFFSET()
-           WHERE id_asignacion = @idAsig;
-
-          INSERT INTO dbo.historial_estados_asignacion (
-            id_asignacion, estado_anterior, estado_nuevo, fecha_efectiva, motivo_codigo
-          )
-          VALUES (@idAsig, @estadoAsigPrev, N'ACTIVO', @fechaEfectiva, N'REACTIVACION_ASISTENCIA');
-        END
-
-        SELECT
-          estado_asignacion,
-          CONVERT(VARCHAR(10), fecha_retiro, 23) AS fecha_retiro
-        FROM dbo.asignaciones
-        WHERE id_asignacion = @idAsig;
-      `);
+WITH anterior AS MATERIALIZED (
+ SELECT * FROM dbo.asignaciones WHERE id_asignacion=@idAsig FOR UPDATE
+), asistencia AS (
+ INSERT INTO dbo.asistencias(id_programa,id_asignacion,id_sesion,estado_asistencia,minutos_asistidos)
+ SELECT @idProg,@idAsig,@idSes,@estado,@mins FROM anterior
+ ON CONFLICT(id_asignacion,id_sesion) DO UPDATE SET estado_asistencia=EXCLUDED.estado_asistencia,minutos_asistidos=EXCLUDED.minutos_asistidos,actualizado_en=CURRENT_TIMESTAMP
+ RETURNING id_asistencia
+), actualizada AS (
+ UPDATE dbo.asignaciones a SET
+ estado_asignacion=CASE WHEN @estado='RETIRO_BAJA' THEN 'RETIRADO' WHEN p.estado_asignacion='RETIRADO' THEN 'ACTIVO' ELSE p.estado_asignacion END,
+ fecha_retiro=CASE WHEN @estado='RETIRO_BAJA' THEN COALESCE(p.fecha_retiro,GREATEST(CAST(@fechaSes AS DATE),p.fecha_inscripcion)) ELSE NULL END,
+ motivo_retiro_codigo=CASE WHEN @estado='RETIRO_BAJA' THEN COALESCE(p.motivo_retiro_codigo,'RETIRO_EN_SESION') ELSE NULL END,
+ actualizado_en=CURRENT_TIMESTAMP FROM anterior p
+ WHERE a.id_asignacion=p.id_asignacion AND EXISTS(SELECT 1 FROM asistencia) RETURNING a.*
+), historial AS (
+ INSERT INTO dbo.historial_estados_asignacion(id_asignacion,estado_anterior,estado_nuevo,fecha_efectiva,motivo_codigo)
+ SELECT n.id_asignacion,p.estado_asignacion,n.estado_asignacion,GREATEST(CAST(@fechaSes AS DATE),p.fecha_inscripcion),CASE WHEN @estado='RETIRO_BAJA' THEN 'RETIRO_EN_SESION' ELSE 'REACTIVACION_ASISTENCIA' END
+ FROM actualizada n JOIN anterior p USING(id_asignacion) WHERE n.estado_asignacion<>p.estado_asignacion
+) SELECT estado_asignacion,to_char(fecha_retiro,'YYYY-MM-DD') AS fecha_retiro FROM actualizada
+`);
 
       await tx.commit();
       const updatedAsig = res.recordset?.[0];
@@ -769,7 +633,7 @@ export class OperacionService {
       };
     } catch (err: any) {
       await tx.rollback();
-      throw new BadRequestException(err?.message || 'Error al registrar asistencia en SQL Server.');
+      throw new BadRequestException(err?.message || 'Error al registrar asistencia en PostgreSQL.');
     }
   }
 
@@ -805,41 +669,7 @@ export class OperacionService {
 
     try {
       const inserted = await this.db.query<any>(
-        `
-        DECLARE @nueva TABLE (id_sesion BIGINT);
-        INSERT INTO dbo.sesiones (
-          id_programa, numero_sesion, id_practica_tecnica, modalidad,
-          duracion_programada_min, fecha_sesion, fecha_hora_inicio,
-          estado_sesion, motivo_estado_codigo
-        )
-        OUTPUT INSERTED.id_sesion INTO @nueva
-        VALUES (
-          @idPrograma, @numeroSesion, @idPractica, @modalidad,
-          @duracion, CAST(@fecha AS DATE), CAST(@fechaHoraInicio AS DATETIMEOFFSET(0)),
-          @estado, @motivo
-        );
-
-        DECLARE @idNueva BIGINT = (SELECT TOP 1 id_sesion FROM @nueva);
-
-        INSERT INTO dbo.historial_estados_sesion (id_sesion, estado_anterior, estado_nuevo, motivo_codigo)
-        VALUES (@idNueva, NULL, @estado, @motivo);
-
-        SELECT
-          s.id_sesion,
-          s.id_programa,
-          p.codigo_programa,
-          s.numero_sesion,
-          cp.codigo_practica,
-          cp.nombre_practica,
-          s.modalidad,
-          s.duracion_programada_min,
-          CONVERT(VARCHAR(10), s.fecha_sesion, 23) AS fecha_sesion,
-          s.estado_sesion
-        FROM dbo.sesiones s
-        JOIN dbo.programas p ON p.id_programa = s.id_programa
-        JOIN dbo.cat_practicas cp ON cp.id_practica = s.id_practica_tecnica
-        WHERE s.id_sesion = @idNueva;
-        `,
+        `WITH nueva AS (INSERT INTO dbo.sesiones(id_programa,numero_sesion,id_practica_tecnica,modalidad,duracion_programada_min,fecha_sesion,fecha_hora_inicio,estado_sesion,motivo_estado_codigo) VALUES(@idPrograma,@numeroSesion,@idPractica,@modalidad,@duracion,CAST(@fecha AS DATE),CAST(@fechaHoraInicio AS TIMESTAMPTZ),@estado,@motivo) RETURNING *), historial AS (INSERT INTO dbo.historial_estados_sesion(id_sesion,estado_anterior,estado_nuevo,motivo_codigo) SELECT id_sesion,NULL,estado_sesion,motivo_estado_codigo FROM nueva) SELECT s.*,p.codigo_programa,cp.codigo_practica,cp.nombre_practica FROM nueva s JOIN dbo.programas p USING(id_programa) JOIN dbo.cat_practicas cp ON cp.id_practica=s.id_practica_tecnica`,
         {
           idPrograma: dto.id_programa,
           numeroSesion: dto.numero_sesion,
@@ -859,85 +689,25 @@ export class OperacionService {
         sesion: inserted[0],
       };
     } catch (err: any) {
-      if (err?.number === 2627 || err?.number === 2601) {
+      if (err?.code === '23505') {
         throw new BadRequestException(
           `Ya existe la sesión número ${dto.numero_sesion} en el programa ${progRows[0].codigo_programa}.`,
         );
       }
-      throw new BadRequestException(err?.message || 'Error al crear la sesión en SQL Server.');
+      throw new BadRequestException(err?.message || 'Error al crear la sesión en PostgreSQL.');
     }
   }
 
   async ejecutarEtl(fechaCorte?: string) {
-    const fecha = fechaCorte ? String(fechaCorte).slice(0, 10) : '2026-11-23';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
-      throw new BadRequestException('fecha_corte debe tener formato AAAA-MM-DD.');
-    }
-
-    try {
-      const dmDb = this.db.dmDatabaseName;
-      await this.db.query(
-        `DECLARE @fc DATE = CAST(@fecha AS DATE); EXEC [${dmDb}].dm.usp_ejecutar_etl @fecha_corte = @fc;`,
-        { fecha },
-      );
-
-      const logs = await this.db.queryDm<any>(
-        `
-        SELECT TOP 1
-          id_ejecucion_etl,
-          CONVERT(VARCHAR(10), fecha_corte, 23) AS fecha_corte,
-          inicio_ejecucion,
-          fin_ejecucion,
-          estado,
-          filas_continuidad,
-          filas_cumplimiento,
-          filas_resultados,
-          incidencias_detectadas,
-          mensaje,
-          usuario_ejecucion
-        FROM dm.etl_log_ejecuciones
-        WHERE fecha_corte = CAST(@fecha AS DATE)
-        ORDER BY id_ejecucion_etl DESC
-        `,
-        { fecha },
-      );
-
-      const ejecucion = logs[0] || null;
-      const incidencias = ejecucion
-        ? await this.db.queryDm<any>(
-            `
-            SELECT
-              id_incidencia,
-              regla_codigo,
-              severidad,
-              entidad_origen,
-              id_registro_origen,
-              detalle,
-              registrado_en
-            FROM dm.etl_incidencias_calidad
-            WHERE id_ejecucion_etl = @idEjecucion
-            ORDER BY id_incidencia
-            `,
-            { idEjecucion: ejecucion.id_ejecucion_etl },
-          )
-        : [];
-
-      return {
-        ok: true,
-        ejecucion,
-        incidencias,
-      };
-    } catch (err: any) {
-      throw new BadRequestException(err?.message || 'Error al ejecutar el proceso ETL del Data Mart.');
-    }
+    return this.etl.run(fechaCorte || '2026-11-23');
   }
 
   async registrarResultado(dto: RegistrarResultadoDto) {
     const ops = await this.db.query(
       `
       SELECT id_oportunidad, codigo_instrumento, aplicable,
-             CONVERT(VARCHAR(10), fecha_ventana_inicio, 23) AS fecha_ventana_inicio,
-             CONVERT(VARCHAR(10), fecha_ventana_fin, 23) AS fecha_ventana_fin
+             to_char(fecha_ventana_inicio, 'YYYY-MM-DD') AS fecha_ventana_inicio,
+             to_char(fecha_ventana_fin, 'YYYY-MM-DD') AS fecha_ventana_fin
       FROM dbo.oportunidades_evaluacion
       WHERE id_oportunidad = @id
       `,
@@ -961,7 +731,7 @@ export class OperacionService {
       const prevRes = await reqCheck.query(`
         SELECT id_resultado, numero_version
         FROM dbo.resultados_evaluacion
-        WHERE id_oportunidad = @idOp AND es_vigente = 1 AND estado_validez = N'VALIDO'
+        WHERE id_oportunidad = @idOp AND es_vigente = 1 AND estado_validez = 'VALIDO'
       `);
 
       const prev = prevRes.recordset?.[0];
@@ -976,7 +746,7 @@ export class OperacionService {
         reqUpd.input('idPrev', prev.id_resultado);
         await reqUpd.query(`
           UPDATE dbo.resultados_evaluacion
-          SET es_vigente = 0, estado_validez = N'REEMPLAZADO', vigente_hasta = SYSDATETIMEOFFSET()
+          SET es_vigente = 0, estado_validez = 'REEMPLAZADO', vigente_hasta = CURRENT_TIMESTAMP
           WHERE id_resultado = @idPrev
         `);
 
@@ -995,7 +765,7 @@ export class OperacionService {
             fecha_realizacion, en_ventana, estado_validez, es_vigente,
             id_resultado_reemplazado, motivo_correccion
           )
-          VALUES (@idOp, @instr, @ver, @pts, CAST(@freal AS DATE), @enVent, N'VALIDO', 1, @idPrev, @motivo)
+          VALUES (@idOp, @instr, @ver, @pts, CAST(@freal AS DATE), @enVent, 'VALIDO', 1, @idPrev, @motivo)
         `);
         await tx.commit();
         return {
@@ -1016,7 +786,7 @@ export class OperacionService {
             id_oportunidad, codigo_instrumento, numero_version, puntaje_total,
             fecha_realizacion, en_ventana, estado_validez, es_vigente
           )
-          VALUES (@idOp, @instr, 1, @pts, CAST(@freal AS DATE), @enVent, N'VALIDO', 1)
+          VALUES (@idOp, @instr, 1, @pts, CAST(@freal AS DATE), @enVent, 'VALIDO', 1)
         `);
         await tx.commit();
         return {

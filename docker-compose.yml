@@ -1,75 +1,81 @@
-# =============================================================================
-# MMET_BI — Orquestación Docker Compose (Desarrollo local y Alibaba Cloud ECS)
-# =============================================================================
-# Uso estándar (conectando a SQL Server externo o Alibaba Cloud RDS SQL Server):
-#   docker compose up -d --build
-#
-# Uso con contenedor local opcional de SQL Server 2022:
-#   docker compose --profile local-sqlserver up -d --build
-# =============================================================================
-
+# Two independent PostgreSQL 17 databases, with separate volumes and connections.
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment: &backend-env
+    NODE_ENV: production
+    COOKIE_SECURE: "false" # Local HTTP demo; use true behind HTTPS.
+    PORT: 4000
+    CORS_ORIGIN: http://localhost:3000
+    OLTP_PG_HOST: postgres-oltp
+    OLTP_PG_PORT: 5432
+    OLTP_PG_DATABASE: mmet_bi_oltp
+    OLTP_PG_USER: postgres
+    OLTP_PG_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD en .env}
+    OLTP_PG_SSL: "false"
+    DM_PG_HOST: postgres-dm
+    DM_PG_PORT: 5432
+    DM_PG_DATABASE: mmet_bi_dm
+    DM_PG_USER: postgres
+    DM_PG_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD en .env}
+    DM_PG_SSL: "false"
+    BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin-local}
+    BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Defina BOOTSTRAP_ADMIN_PASSWORD en .env}
+    AI_BASE_URL: ${AI_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
+    AI_API_KEY: ${AI_API_KEY:-}
+    AI_MODEL: ${AI_MODEL:-qwen-plus}
+  depends_on:
+    postgres-oltp:
+      condition: service_healthy
+    postgres-dm:
+      condition: service_healthy
 services:
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: mmet_bi_sqlserver
-    profiles: ["local-sqlserver"]
+  postgres-oltp:
+    image: postgres:17
     environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_PID: "Express"
-      MSSQL_SA_PASSWORD: ${DB_PASSWORD:-CambiarPorPasswordSeguro123!}
-    ports:
-      - "${DB_PORT:-1433}:1433"
-    volumes:
-      - mmet_sqlserver_data:/var/opt/mssql
-      - ./sql_server:/scripts:ro
+      POSTGRES_DB: mmet_bi_oltp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD en .env}
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: ["mmet_oltp_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mmet_bi_oltp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
-
+  postgres-dm:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: mmet_bi_dm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD en .env}
+    ports: ["127.0.0.1:5434:5432"]
+    volumes: ["mmet_dm_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mmet_bi_dm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  db-init:
+    <<: *backend
+    command: ["sh", "-c", "npm run db:init && npm run db:seed && node scripts/db.cjs etl 2026-11-23"]
+    restart: "no"
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: mmet_bi_backend
-    environment:
-      NODE_ENV: production
-      PORT: 4000
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
-      # Conexión SQL Server (Alibaba Cloud RDS / ECS o servicio local `sqlserver`)
-      DB_AUTH_MODE: ${DB_AUTH_MODE:-sql}
-      DB_SERVER: ${DB_SERVER:-sqlserver}
-      DB_PORT: ${DB_PORT:-1433}
-      DB_DATABASE: ${DB_DATABASE:-MMET_BI_OLTP}
-      DB_DM_NAME: ${DB_DM_NAME:-MMET_BI_DM}
-      DB_USER: ${DB_USER:-sa}
-      DB_PASSWORD: ${DB_PASSWORD:-CambiarPorPasswordSeguro123!}
-      DB_ENCRYPT: ${DB_ENCRYPT:-true}
-      DB_TRUST_SERVER_CERT: ${DB_TRUST_SERVER_CERT:-true}
-      # Bootstrap ADMIN
-      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin-local}
-      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-CambiarPorClaveDeAlMenos14Caracteres!}
-      # IA Generativa (RQ-BI-15) — Alibaba Cloud Model Studio / OpenAI-compatible
-      AI_BASE_URL: ${AI_BASE_URL:-https://dashscope-intl.aliyuncs.com/compatible-mode/v1}
-      AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-qwen-plus}
-      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-20000}
-    ports:
-      - "${BACKEND_PORT:-4000}:4000"
+    <<: *backend
+    ports: ["4000:4000"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
     restart: unless-stopped
-
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
-    container_name: mmet_bi_frontend
-    depends_on:
-      - backend
-    environment:
-      NODE_ENV: production
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api}
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+        NEXT_PUBLIC_API_URL: http://localhost:4000/api
+    ports: ["3000:3000"]
+    depends_on: [backend]
     restart: unless-stopped
-
 volumes:
-  mmet_sqlserver_data:
+  mmet_oltp_data:
+  mmet_dm_data:

@@ -32,7 +32,7 @@ export class AuthController {
   @Post('login')
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: any) {
     const { token, csrfToken, user } = await this.auth.login(dto.username, dto.password);
-    const cookieOptions = { sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 8 * 60 * 60 * 1000 };
+    const cookieOptions = { sameSite: 'lax', secure: (process.env.COOKIE_SECURE === 'true' || (process.env.COOKIE_SECURE !== 'false' && process.env.NODE_ENV === 'production')), path: '/', maxAge: 8 * 60 * 60 * 1000 };
     response.cookie('mmet_session', token, { ...cookieOptions, httpOnly: true });
     response.cookie('mmet_csrf', csrfToken, { ...cookieOptions, httpOnly: false });
     return { user };
@@ -41,8 +41,8 @@ export class AuthController {
   @Post('logout')
   async logout(@Req() request: any, @Res({ passthrough: true }) response: any) {
     await this.auth.logout(request.sessionToken);
-    response.clearCookie('mmet_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' });
-    response.clearCookie('mmet_csrf', { sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' });
+    response.clearCookie('mmet_session', { httpOnly: true, sameSite: 'lax', secure: (process.env.COOKIE_SECURE === 'true' || (process.env.COOKIE_SECURE !== 'false' && process.env.NODE_ENV === 'production')), path: '/' });
+    response.clearCookie('mmet_csrf', { sameSite: 'lax', secure: (process.env.COOKIE_SECURE === 'true' || (process.env.COOKIE_SECURE !== 'false' && process.env.NODE_ENV === 'production')), path: '/' });
     return { ok: true };
   }
 

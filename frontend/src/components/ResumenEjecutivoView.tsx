@@ -200,7 +200,7 @@ export function ResumenEjecutivoView({
           <div className="space-y-2 max-w-2xl">
             <div className="inline-flex items-center gap-2 rounded-full bg-teal-500/15 border border-teal-400/25 px-3 py-1 text-[11px] font-semibold text-teal-300">
               <Database className="w-3.5 h-3.5" aria-hidden="true" />
-              Resumen Ejecutivo · Data Mart SQL Server (dm.*)
+              Resumen Ejecutivo · Data Mart PostgreSQL (dm.*)
             </div>
             <h2 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Tablero Integral de Bienestar Universitario

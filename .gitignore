@@ -37,3 +37,6 @@ Thumbs.db
 
 # Local generated administrator credentials
 backend/.local-admin-credentials.txt
+
+# Local database clusters, dumps and credentials
+.local/

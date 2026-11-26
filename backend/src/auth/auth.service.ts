@@ -17,8 +17,8 @@ export class AuthService implements OnModuleInit {
     const salt = randomBytes(32);
     const hash = scryptSync(password, salt, 64);
     await this.db.query(
-      `INSERT dbo.usuarios_sistema(nombre_usuario,hash_credencial,sal_credencial,rol)
-       VALUES(@username,@hash,@salt,N'ADMIN')`,
+      `INSERT INTO dbo.usuarios_sistema(nombre_usuario,hash_credencial,sal_credencial,rol)
+       VALUES(@username,@hash,@salt,'ADMIN')`,
       { username, hash, salt },
     );
   }
@@ -38,8 +38,8 @@ export class AuthService implements OnModuleInit {
     const hash = createHash('sha256').update(token).digest();
     const id = randomUUID();
     await this.db.query(
-      `INSERT dbo.sesiones_autenticacion(id_sesion,id_usuario,hash_token,creado_en,expira_en)
-       VALUES(@id,@userId,@hash,SYSDATETIMEOFFSET(),DATEADD(HOUR,8,SYSDATETIMEOFFSET()))`,
+      `INSERT INTO dbo.sesiones_autenticacion(id_sesion,id_usuario,hash_token,creado_en,expira_en)
+       VALUES(@id,@userId,@hash,CURRENT_TIMESTAMP,(CURRENT_TIMESTAMP + (8) * INTERVAL '1 hour'))`,
       { id, userId: user.id_usuario, hash },
     );
     return { token, csrfToken, user: this.publicUser(user) };
@@ -49,9 +49,9 @@ export class AuthService implements OnModuleInit {
     if (!token) throw new UnauthorizedException('Inicia sesión para continuar.');
     const hash = createHash('sha256').update(token).digest();
     const rows = await this.db.query<any>(
-      `SELECT TOP 1 u.id_usuario,u.id_estudiante,u.nombre_usuario,u.rol,s.id_sesion
+      `SELECT u.id_usuario,u.id_estudiante,u.nombre_usuario,u.rol,s.id_sesion
        FROM dbo.sesiones_autenticacion s JOIN dbo.usuarios_sistema u ON u.id_usuario=s.id_usuario
-       WHERE s.hash_token=@hash AND s.revocado_en IS NULL AND s.expira_en>SYSDATETIMEOFFSET() AND u.activo=1`,
+       WHERE s.hash_token=@hash AND s.revocado_en IS NULL AND s.expira_en>CURRENT_TIMESTAMP AND u.activo=1 LIMIT 1`,
       { hash },
     );
     if (!rows.length) throw new UnauthorizedException('La sesión expiró. Inicia sesión nuevamente.');
@@ -62,7 +62,7 @@ export class AuthService implements OnModuleInit {
     if (token) {
       const hash = createHash('sha256').update(token).digest();
       await this.db.query(
-        'UPDATE dbo.sesiones_autenticacion SET revocado_en=SYSDATETIMEOFFSET() WHERE hash_token=@hash AND revocado_en IS NULL',
+        'UPDATE dbo.sesiones_autenticacion SET revocado_en=CURRENT_TIMESTAMP WHERE hash_token=@hash AND revocado_en IS NULL',
         { hash },
       );
     }
@@ -76,16 +76,16 @@ export class AuthService implements OnModuleInit {
     if (input.role !== 'ESTUDIANTE' && input.studentId) throw new BadRequestException('Solo una cuenta ESTUDIANTE se vincula con un estudiante.');
     const username = input.username.trim();
     if (!username) throw new BadRequestException('El nombre de usuario no puede estar vacío.');
-    const exists = await this.db.query('SELECT TOP 1 id_usuario FROM dbo.usuarios_sistema WHERE nombre_usuario=@username', { username });
+    const exists = await this.db.query('SELECT id_usuario FROM dbo.usuarios_sistema WHERE nombre_usuario=@username LIMIT 1', { username });
     if (exists.length) throw new ConflictException('Ese nombre de usuario ya está ocupado.');
     if (input.studentId) {
-      const student = await this.db.query('SELECT TOP 1 id_estudiante FROM dbo.estudiantes WHERE id_estudiante=@studentId', { studentId: input.studentId });
+      const student = await this.db.query('SELECT id_estudiante FROM dbo.estudiantes WHERE id_estudiante=@studentId LIMIT 1', { studentId: input.studentId });
       if (!student.length) throw new BadRequestException('El estudiante seleccionado no existe.');
     }
     const salt = randomBytes(32);
     const hash = scryptSync(input.password, salt, 64);
     await this.db.query(
-      `INSERT dbo.usuarios_sistema(id_estudiante,nombre_usuario,hash_credencial,sal_credencial,rol)
+      `INSERT INTO dbo.usuarios_sistema(id_estudiante,nombre_usuario,hash_credencial,sal_credencial,rol)
        VALUES(@studentId,@username,@hash,@salt,@role)`,
       { studentId: input.studentId ?? null, username, hash, salt, role: input.role },
     );
@@ -94,11 +94,11 @@ export class AuthService implements OnModuleInit {
 
   async getStudentsReadyForAccount() {
     return this.db.query(
-      `SELECT e.id_estudiante,e.codigo_estudiante,e.nombres,e.apellidos,e.correo_institucional,e.carrera,COUNT_BIG(op.id_oportunidad) AS evaluaciones_disponibles
+      `SELECT e.id_estudiante,e.codigo_estudiante,e.nombres,e.apellidos,e.correo_institucional,e.carrera,COUNT(op.id_oportunidad) AS evaluaciones_disponibles
        FROM dbo.estudiantes e
        JOIN dbo.oportunidades_evaluacion op ON op.id_estudiante=e.id_estudiante AND op.aplicable=1 AND op.id_version_instrumento IS NOT NULL
-       JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento AND iv.estado_contenido=N'PUBLICADO'
-       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez=N'VALIDO'
+       JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento AND iv.estado_contenido='PUBLICADO'
+       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez='VALIDO'
        LEFT JOIN dbo.usuarios_sistema u ON u.id_estudiante=e.id_estudiante
        WHERE u.id_usuario IS NULL AND r.id_resultado IS NULL
        GROUP BY e.id_estudiante,e.codigo_estudiante,e.nombres,e.apellidos,e.correo_institucional,e.carrera
