@@ -434,7 +434,7 @@ export function CumplimientoReport({ filtros, corteInicial, semestre }: Cumplimi
       ) : (
         <PowerDataTable
           title="Matriz Oficial RO-02 · Registro de Oportunidades de Evaluación"
-          subtitle="Ordena por puntaje, fecha o estado, busca por estudiante y exporta la selección actual a Excel (CSV UTF-8)."
+          subtitle="Ordena por puntaje, fecha o estado, busca por estudiante y exporta la selección actual a PDF, Word, Excel o CSV."
           caption="Tabla operativa RO-02 de control de evaluaciones PSS-10 y PCL-5"
           data={oportunidades}
           columns={columns}

@@ -470,7 +470,7 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
       ) : (
         <PowerDataTable
           title={`Matriz Oficial RG-01 por ${etiquetaDimension}`}
-          subtitle="Pares válidos en ventana (PSS-10 y PCL-5 estrictamente separados). Ordena por cualquier columna o exporta a Excel (CSV UTF-8)."
+          subtitle="Pares válidos en ventana (PSS-10 y PCL-5 estrictamente separados). Ordena por cualquier columna o exporta a PDF, Word, Excel o CSV."
           caption={`Tabla oficial RG-01 de evolución PSS-10 y PCL-5 agrupada por ${etiquetaDimension}`}
           data={filas}
           columns={columns}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   flexRender,
   getCoreRowModel,
@@ -15,12 +15,19 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
+  FileSpreadsheet,
+  FileText,
+  FileType2,
+  Loader2,
   Search,
+  Table2,
   X,
 } from 'lucide-react';
+import { exportReport, type ReportExportFormat } from '@/lib/reportExport';
 
 export interface CsvColumn<T> {
   header: string;
@@ -54,15 +61,6 @@ interface PowerDataTableProps<T> {
     value: string;
     onChange: (v: string) => void;
   };
-}
-
-function escapeCsvCell(val: string | number | boolean | null | undefined): string {
-  if (val === null || val === undefined) return '';
-  const str = String(val);
-  if (/[",\r\n;]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
 }
 
 export function DataBarCell({
@@ -131,7 +129,45 @@ export function PowerDataTable<T>({
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
   const [localSearch, setLocalSearch] = useState('');
   const [sortStatusText, setSortStatusText] = useState('');
+  const [exportingFormat, setExportingFormat] = useState<ReportExportFormat | null>(null);
   const captionId = useId();
+  const exportPopoverId = useId();
+  const exportTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const exportPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const popoverEl = exportPopoverRef.current;
+    if (!popoverEl) return;
+
+    const handleToggle = (event: Event) => {
+      const toggleEvent = event as ToggleEvent;
+      if (toggleEvent.newState !== 'open') return;
+      if (typeof CSS !== 'undefined' && CSS.supports('position-area: block-end')) return;
+
+      const triggerEl = exportTriggerRef.current;
+      if (!triggerEl) return;
+      const rect = triggerEl.getBoundingClientRect();
+      const popRect = popoverEl.getBoundingClientRect();
+      const margin = 8;
+
+      let left = rect.right - popRect.width;
+      if (left < margin) left = Math.max(margin, rect.left);
+      if (left + popRect.width > window.innerWidth - margin) {
+        left = Math.max(margin, window.innerWidth - popRect.width - margin);
+      }
+
+      let top = rect.bottom + 6;
+      if (top + popRect.height > window.innerHeight - margin) {
+        top = Math.max(margin, rect.top - popRect.height - 6);
+      }
+
+      popoverEl.style.left = `${left}px`;
+      popoverEl.style.top = `${top}px`;
+    };
+
+    popoverEl.addEventListener('toggle', handleToggle);
+    return () => popoverEl.removeEventListener('toggle', handleToggle);
+  }, []);
 
   const searchValue = externalSearch ? externalSearch.value : localSearch;
   const setSearchValue = externalSearch ? externalSearch.onChange : setLocalSearch;
@@ -171,21 +207,22 @@ export function PowerDataTable<T>({
     [data, sorting, localSearch],
   );
 
-  const handleExportCsv = () => {
-    const headerLine = csvColumns.map((c) => escapeCsvCell(c.header)).join(',');
-    const bodyLines = exportRows.map((row) =>
-      csvColumns.map((c) => escapeCsvCell(c.accessor(row))).join(','),
-    );
-    const csvContent = '\uFEFF' + [headerLine, ...bodyLines].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = csvFilename.endsWith('.csv') ? csvFilename : `${csvFilename}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleExport = async (format: ReportExportFormat) => {
+    if (exportRows.length === 0 || exportingFormat) return;
+    exportPopoverRef.current?.hidePopover?.();
+    setExportingFormat(format);
+    try {
+      await exportReport({
+        format,
+        title,
+        subtitle,
+        filename: csvFilename,
+        columns: csvColumns,
+        rows: exportRows,
+      });
+    } finally {
+      setExportingFormat(null);
+    }
   };
 
   const rowsToRender = serverPagination ? table.getRowModel().rows : table.getRowModel().rows;
@@ -246,16 +283,99 @@ export function PowerDataTable<T>({
             )}
           </div>
 
-          {/* Export CSV (UTF-8 BOM for Excel) */}
+          {/* Export multi-format selector (modern-web-guidance: viewport-aware-dropdowns) */}
           <button
+            ref={exportTriggerRef}
             type="button"
-            onClick={handleExportCsv}
-            disabled={exportRows.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={exportRows.length === 0 || exportingFormat !== null}
+            popoverTarget={exportPopoverId}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white border border-teal-700/20 shadow-sm text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Download className="w-3.5 h-3.5" aria-hidden="true" />
-            Exportar CSV (Excel)
+            {exportingFormat ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Download className="w-3.5 h-3.5" aria-hidden="true" />
+            )}
+            <span>
+              {exportingFormat ? `Exportando ${exportingFormat.toUpperCase()}...` : 'Exportar'}
+            </span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-85" aria-hidden="true" />
           </button>
+
+          <div
+            ref={exportPopoverRef}
+            id={exportPopoverId}
+            popover="auto"
+            className="mwg-export-popover"
+          >
+            <div className="px-3 py-2 bg-[#0B1220] text-white border-b-2 border-teal-500">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-teal-300">
+                Formato de descarga
+              </p>
+              <p className="text-[10px] text-slate-300 mt-0.5 tabular-nums">
+                {exportRows.length} registro{exportRows.length === 1 ? '' : 's'} en vista actual
+              </p>
+            </div>
+            <div className="p-1.5 flex flex-col gap-0.5">
+              <button
+                type="button"
+                onClick={() => handleExport('pdf')}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none transition-colors"
+              >
+                <span className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 border border-rose-200/80 flex items-center justify-center shrink-0">
+                  <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-slate-800">Documento PDF</span>
+                  <span className="block text-[10px] text-slate-500">Diseño institucional (.pdf)</span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleExport('docx')}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none transition-colors"
+              >
+                <span className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 border border-indigo-200/80 flex items-center justify-center shrink-0">
+                  <FileType2 className="w-3.5 h-3.5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-slate-800">Documento Word</span>
+                  <span className="block text-[10px] text-slate-500">Editable con estilos (.docx)</span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleExport('xlsx')}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none transition-colors"
+              >
+                <span className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-slate-800">Libro Excel</span>
+                  <span className="block text-[10px] text-slate-500">Con colores y filtros (.xlsx)</span>
+                </span>
+              </button>
+
+              <hr className="my-1 border-slate-100" />
+
+              <button
+                type="button"
+                onClick={() => handleExport('csv')}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none transition-colors"
+              >
+                <span className="w-7 h-7 rounded-lg bg-slate-100 text-slate-600 border border-slate-200 flex items-center justify-center shrink-0">
+                  <Table2 className="w-3.5 h-3.5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-slate-800">Datos CSV</span>
+                  <span className="block text-[10px] text-slate-500">Texto plano UTF-8 (.csv)</span>
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

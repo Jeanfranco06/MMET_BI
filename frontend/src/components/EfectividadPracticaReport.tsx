@@ -361,7 +361,7 @@ export function EfectividadPracticaReport({
               ? `Matriz Oficial RG-02 · Efectividad por Práctica (${instrumento})`
               : `Matriz Oficial RG-02 · Efectividad por Programa / Cohorte (${instrumento})`
           }
-          subtitle="Ordena por reducción o evidencia muestral, busca rápidamente o exporta a Excel (CSV UTF-8)."
+          subtitle="Ordena por reducción o evidencia muestral, busca rápidamente o exporta a PDF, Word, Excel o CSV."
           caption={`Tabla oficial RG-02 comparativa de efectividad por ${vista} en ${instrumento}`}
           data={filas}
           columns={columns}

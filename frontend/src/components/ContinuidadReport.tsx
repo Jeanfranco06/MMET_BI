@@ -398,7 +398,7 @@ export function ContinuidadReport({ filtros, corteInicial, semestre }: Continuid
       ) : (
         <PowerDataTable
           title="Matriz Oficial RO-01 · Seguimiento Nominal de Continuidad"
-          subtitle="Ordena por % de asistencia o estado, busca por código anonimizado/facultad y exporta a Excel (CSV UTF-8)."
+          subtitle="Ordena por % de asistencia o estado, busca por código anonimizado/facultad y exporta a PDF, Word, Excel o CSV."
           caption="Tabla operativa RO-01 de continuidad y asistencia estudiantil"
           data={estudiantes}
           columns={columns}
