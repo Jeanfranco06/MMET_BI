@@ -12,6 +12,13 @@ interface FiltrosQuery {
 
 @Injectable()
 export class AnalyticsService {
+  private readonly cacheTtlMs = 15_000;
+  private filtrosCache: { expiresAt: number; promise: Promise<any> } | null = null;
+  private readonly corteCache = new Map<
+    string,
+    { expiresAt: number; promise: Promise<{ skCorte: number; fechaAplicada: string }> }
+  >();
+
   constructor(private readonly db: DatabaseService) {}
 
   private semaforoPss(pares: number, red: number | null): SemaforoEstado {
@@ -59,6 +66,23 @@ export class AnalyticsService {
    */
   private async resolveCorteDm(corte: string): Promise<{ skCorte: number; fechaAplicada: string }> {
     const clean = /^\d{4}-\d{2}-\d{2}$/.test(corte) ? corte : '2026-11-23';
+    const now = Date.now();
+    const cached = this.corteCache.get(clean);
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+
+    const promise = this.resolveCorteDmUncached(clean).catch((err) => {
+      this.corteCache.delete(clean);
+      throw err;
+    });
+    this.corteCache.set(clean, { expiresAt: now + this.cacheTtlMs, promise });
+    return promise;
+  }
+
+  private async resolveCorteDmUncached(
+    clean: string,
+  ): Promise<{ skCorte: number; fechaAplicada: string }> {
     const targetSk = Number(clean.replace(/-/g, ''));
 
     const rows = await this.db.queryDm<{ sk_tiempo: number; fecha: string }>(
@@ -97,6 +121,20 @@ export class AnalyticsService {
   }
 
   async getFiltros() {
+    const now = Date.now();
+    if (this.filtrosCache && this.filtrosCache.expiresAt > now) {
+      return this.filtrosCache.promise;
+    }
+
+    const promise = this.loadFiltrosUncached().catch((err) => {
+      this.filtrosCache = null;
+      throw err;
+    });
+    this.filtrosCache = { expiresAt: now + this.cacheTtlMs, promise };
+    return promise;
+  }
+
+  private async loadFiltrosUncached() {
     const [
       practicas,
       programas,
@@ -567,53 +605,63 @@ export class AnalyticsService {
       facultadVista: q.facultad ?? 'TODAS',
     };
 
-    // RG-02: Lee directamente desde dm.vw_HechoEfectividadPractica filtrando por Facultad/Área
-    // ANTES de agrupar por Práctica × Instrumento y exigiendo ParesValidos >= 5.
+    // RG-02: Agregación directa sobre dm.HechoResultadosEvaluacion filtrando por Facultad/Área
+    // y Periodo ANTES de agrupar por Práctica × Instrumento (evita doble scan y memory grant
+    // excesivo de GROUPING SETS en instancias SQL Server con poca memoria de workspace).
     const [porPracticaRaw, porProgramaRaw] = await Promise.all([
       this.db.queryDm(
         `
         SELECT
           pr.id_practica,
-          v.codigo_practica,
-          v.nombre_practica,
-          v.tipo_practica,
+          pr.codigo_practica,
+          pr.nombre_practica,
+          pr.tipo_practica,
           pr.es_mixto,
-          v.ParesValidos        AS pares_validos,
-          v.PromedioInicial     AS promedio_inicial,
-          v.PromedioFinal       AS promedio_final,
-          v.ReduccionPromedio   AS reduccion_promedio,
-          v.EsPracticaEvaluable AS es_evaluable_practica,
-          v.CumpleMetaOperativa AS cumple_meta_vista,
-          v.EstadoSemaforo      AS semaforo_vista,
-          ISNULL(det.disminuyeron, 0) AS disminuyeron,
-          ISNULL(det.sin_cambio, 0)   AS sin_cambio,
-          ISNULL(det.aumentaron, 0)   AS aumentaron
-        FROM dm.vw_HechoEfectividadPractica v
-        JOIN dm.DimPractica pr ON pr.sk_practica = v.sk_practica
-        LEFT JOIN (
-          SELECT
-            h.sk_practica,
-            SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
-            SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
-            SUM(CAST(h.EsIncremento AS INT)) AS aumentaron
-          FROM dm.HechoResultadosEvaluacion h
-          JOIN dm.DimInstrumento i ON i.sk_instrumento = h.sk_instrumento
-          JOIN dm.DimEstudiante  e ON e.sk_estudiante  = h.sk_estudiante
-          JOIN dm.DimPrograma    p ON p.sk_programa    = h.sk_programa
-          WHERE h.sk_tiempo_corte = @skCorte
-            AND i.codigo_instrumento = @instrumento
-            AND (@semestre IS NULL OR p.periodo_academico = @semestre)
-            AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
-          GROUP BY h.sk_practica
-        ) det ON det.sk_practica = v.sk_practica
-        WHERE v.sk_tiempo_corte = @skCorte
-          AND v.codigo_instrumento = @instrumento
-          AND v.facultad_o_area = @facultadVista
-          AND (@semestre IS NULL OR v.periodo_academico = @semestre)
+          SUM(CAST(h.ParesValidos AS INT)) AS pares_validos,
+          CASE
+            WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5
+            THEN CAST(SUM(CAST(h.SumaInicial AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(8,2))
+            ELSE NULL
+          END AS promedio_inicial,
+          CASE
+            WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5
+            THEN CAST(SUM(CAST(h.SumaFinal AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(8,2))
+            ELSE NULL
+          END AS promedio_final,
+          CASE
+            WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5
+            THEN CAST(SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(8,2))
+            ELSE NULL
+          END AS reduccion_promedio,
+          CASE WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5 THEN 1 ELSE 0 END AS es_evaluable_practica,
+          CASE
+            WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5
+             AND (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= MAX(i.meta_reduccion_operativa)
+            THEN 1 ELSE 0
+          END AS cumple_meta_vista,
+          CASE
+            WHEN SUM(CAST(h.ParesValidos AS INT)) < 5 THEN N'SUPRIMIDO'
+            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= MAX(i.meta_reduccion_operativa) THEN N'BUENO'
+            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= 0.0 THEN N'REGULAR'
+            ELSE N'MALO'
+          END AS semaforo_vista,
+          SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
+          SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
+          SUM(CAST(h.EsIncremento AS INT)) AS aumentaron
+        FROM dm.HechoResultadosEvaluacion h
+        JOIN dm.DimInstrumento i  ON i.sk_instrumento = h.sk_instrumento
+        JOIN dm.DimPractica    pr ON pr.sk_practica   = h.sk_practica
+        JOIN dm.DimEstudiante  e  ON e.sk_estudiante  = h.sk_estudiante
+        JOIN dm.DimPrograma    p  ON p.sk_programa    = h.sk_programa
+        WHERE h.sk_tiempo_corte = @skCorte
+          AND i.codigo_instrumento = @instrumento
+          AND (@semestre IS NULL OR p.periodo_academico = @semestre)
+          AND (@facultad IS NULL OR e.facultad_o_area = @facultad)
+        GROUP BY pr.id_practica, pr.codigo_practica, pr.nombre_practica, pr.tipo_practica, pr.es_mixto
         ORDER BY
-          CASE WHEN v.ParesValidos >= 5 THEN 0 ELSE 1 END,
-          v.ReduccionPromedio DESC,
-          v.codigo_practica ASC
+          CASE WHEN SUM(CAST(h.ParesValidos AS INT)) >= 5 THEN 0 ELSE 1 END,
+          CAST(SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0) AS DECIMAL(8,2)) DESC,
+          pr.codigo_practica ASC
         `,
         params,
       ),

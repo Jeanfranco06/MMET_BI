@@ -2,9 +2,6 @@ import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import * as sqlTedious from 'mssql';
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const sqlNative = require('mssql/msnodesqlv8');
-
 export interface SqlParam {
   name: string;
   type: any;
@@ -29,17 +26,26 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return this.dmDatabase;
   }
 
-  private async connectPool(database: string) {
+  private async connectPool(database: string, maxConnections = 10) {
     const authMode = (this.config.get<string>('DB_AUTH_MODE') || 'windows').toLowerCase();
     const server = this.config.get<string>('DB_SERVER') || 'localhost';
 
     if (authMode === 'windows') {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sqlNative = require('mssql/msnodesqlv8');
       const odbcDriver = this.config.get<string>('DB_ODBC_DRIVER') || 'ODBC Driver 17 for SQL Server';
       this.driver = sqlNative;
       const connectionString = `Driver={${odbcDriver}};Server=${server};Database=${database};Trusted_Connection=Yes;TrustServerCertificate=Yes;`;
       const pool = await new sqlNative.ConnectionPool({
         connectionString,
         driver: 'msnodesqlv8',
+        pool: {
+          max: maxConnections,
+          min: 0,
+          idleTimeoutMillis: 30000,
+          acquireTimeoutMillis: 60000,
+          createTimeoutMillis: 30000,
+        },
       }).connect();
       this.logger.log(`Conectado a SQL Server (${server}/${database}) via Windows Auth [${odbcDriver}]`);
       return pool;
@@ -52,12 +58,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       database,
       user: this.config.get<string>('DB_USER'),
       password: this.config.get<string>('DB_PASSWORD'),
+      connectionTimeout: 30000,
+      requestTimeout: 60000,
+      pool: {
+        max: maxConnections,
+        min: 0,
+        idleTimeoutMillis: 30000,
+        acquireTimeoutMillis: 60000,
+        createTimeoutMillis: 30000,
+      },
       options: {
         encrypt: this.config.get<string>('DB_ENCRYPT') !== 'false',
         trustServerCertificate: this.config.get<string>('DB_TRUST_SERVER_CERT') !== 'false',
       },
     }).connect();
-    this.logger.log(`Conectado a SQL Server (${server}/${database}) via SQL Auth`);
+    this.logger.log(`Conectado a SQL Server (${server}/${database}) via SQL Auth (pool max=${maxConnections})`);
     return pool;
   }
 
@@ -69,8 +84,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
     this.dmDatabase = dmDatabase;
 
-    this.pool = await this.connectPool(oltpDatabase);
-    this.dmPool = await this.connectPool(dmDatabase);
+    const dmPoolMax = Math.max(1, Number(this.config.get<string>('DB_DM_POOL_MAX') || 4));
+    this.pool = await this.connectPool(oltpDatabase, 10);
+    this.dmPool = await this.connectPool(dmDatabase, dmPoolMax);
   }
 
   async onModuleDestroy() {
