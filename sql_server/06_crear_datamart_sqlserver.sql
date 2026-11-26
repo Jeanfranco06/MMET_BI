@@ -385,20 +385,64 @@ CREATE TABLE dm.HechoResultadosEvaluacion (
 GO
 
 -- ============================================================================
--- 5. ÍNDICES ANALÍTICOS EN TABLAS DE HECHOS
+-- 5. ÍNDICES DE RENDIMIENTO EN HECHOS, DIMENSIONES Y CONTROL ETL
 -- ============================================================================
 
+-- 5.1 Índices covering en tablas de hechos (consultas BI y MERGE por @sk_tiempo_corte)
 CREATE INDEX ix_hcont_corte_practica
     ON dm.HechoContinuidad (sk_tiempo_corte, sk_practica, sk_estado_continuidad)
     INCLUDE (EsEvaluable, Continua, SesionesExigibles, Asistencias, Inasistencias);
+
+CREATE INDEX ix_hcont_corte_programa
+    ON dm.HechoContinuidad (sk_tiempo_corte, sk_programa, sk_estado_continuidad)
+    INCLUDE (sk_estudiante, sk_practica, EsEvaluable, Continua, SesionesExigibles, Asistencias, Inasistencias);
+
+CREATE INDEX ix_hcont_corte_estudiante
+    ON dm.HechoContinuidad (sk_tiempo_corte, sk_estudiante)
+    INCLUDE (sk_programa, sk_practica, sk_estado_continuidad, EsEvaluable, Continua);
 
 CREATE INDEX ix_hcump_corte_instr_estado
     ON dm.HechoCumplimientoEvaluaciones (sk_tiempo_corte, sk_instrumento, sk_estado_evaluacion)
     INCLUDE (EsElegible, EsCompletadaElegible, EsEnVentana, EsTardia, EsPendiente, EsVencida);
 
+CREATE INDEX ix_hcump_corte_programa_est
+    ON dm.HechoCumplimientoEvaluaciones (sk_tiempo_corte, sk_programa, sk_estudiante)
+    INCLUDE (sk_practica, sk_instrumento, sk_evento_indice, sk_momento, sk_estado_evaluacion,
+             EsElegible, EsCompletadaElegible, EsEnVentana, EsTardia, EsPendiente, EsVencida);
+
 CREATE INDEX ix_hres_corte_practica_instr
     ON dm.HechoResultadosEvaluacion (sk_tiempo_corte, sk_practica, sk_instrumento, sk_estudiante)
-    INCLUDE (ParesValidos, SumaInicial, SumaFinal, PuntosReduccion);
+    INCLUDE (sk_programa, sk_evento_indice, ParesValidos, SumaInicial, SumaFinal, PuntosReduccion,
+             EsReduccion, EsSinCambio, EsIncremento);
+
+CREATE INDEX ix_hres_corte_instr_prog
+    ON dm.HechoResultadosEvaluacion (sk_tiempo_corte, sk_instrumento, sk_programa)
+    INCLUDE (sk_practica, sk_estudiante, sk_evento_indice, ParesValidos, SumaInicial, SumaFinal,
+             PuntosReduccion, EsReduccion, EsSinCambio, EsIncremento);
+
+-- 5.2 Índices de filtrado en dimensiones
+CREATE INDEX ix_dim_est_facultad_grupo
+    ON dm.DimEstudiante (facultad_o_area, grupo_etario, sexo_codificado, ciclo_academico)
+    INCLUDE (codigo_estudiante);
+
+CREATE INDEX ix_dim_prog_periodo
+    ON dm.DimPrograma (periodo_academico, fecha_inicio)
+    INCLUDE (codigo_programa, nombre_programa, estado_programa);
+
+CREATE INDEX ix_dim_evt_categoria
+    ON dm.DimEventoIndice (es_no_aplica, codigo_categoria)
+    INCLUDE (codigo_evento_local, nombre_categoria);
+
+-- 5.3 Índices en tablas de auditoría y calidad ETL
+CREATE INDEX ix_etl_log_corte_estado
+    ON dm.etl_log_ejecuciones (fecha_corte, estado);
+
+CREATE INDEX ix_etl_inc_ejecucion_regla
+    ON dm.etl_incidencias_calidad (id_ejecucion_etl, regla_codigo)
+    INCLUDE (severidad, fecha_corte);
+
+CREATE INDEX ix_etl_inc_corte_regla
+    ON dm.etl_incidencias_calidad (fecha_corte, regla_codigo, severidad);
 GO
 
 -- ============================================================================

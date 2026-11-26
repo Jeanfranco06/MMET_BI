@@ -50,6 +50,37 @@ IF OBJECT_ID(N'dm.DimTiempo', N'U') IS NULL
     THROW 53000, N'Faltan objetos requeridos en el esquema dm.', 1;
 
 -- ============================================================================
+-- 1.B VERIFICACIÓN DE ÍNDICES DE RENDIMIENTO EN MMET_BI_DM
+-- ============================================================================
+DECLARE @indices_faltantes INT = (
+    SELECT COUNT(*)
+      FROM (VALUES
+          (N'dm.HechoContinuidad',             N'ix_hcont_corte_practica'),
+          (N'dm.HechoContinuidad',             N'ix_hcont_corte_programa'),
+          (N'dm.HechoContinuidad',             N'ix_hcont_corte_estudiante'),
+          (N'dm.HechoCumplimientoEvaluaciones',N'ix_hcump_corte_instr_estado'),
+          (N'dm.HechoCumplimientoEvaluaciones',N'ix_hcump_corte_programa_est'),
+          (N'dm.HechoResultadosEvaluacion',    N'ix_hres_corte_practica_instr'),
+          (N'dm.HechoResultadosEvaluacion',    N'ix_hres_corte_instr_prog'),
+          (N'dm.DimEstudiante',                N'ix_dim_est_facultad_grupo'),
+          (N'dm.DimPrograma',                  N'ix_dim_prog_periodo'),
+          (N'dm.DimEventoIndice',              N'ix_dim_evt_categoria'),
+          (N'dm.etl_log_ejecuciones',          N'ix_etl_log_corte_estado'),
+          (N'dm.etl_incidencias_calidad',      N'ix_etl_inc_ejecucion_regla'),
+          (N'dm.etl_incidencias_calidad',      N'ix_etl_inc_corte_regla')
+      ) AS req(tabla_obj, nombre_idx)
+     WHERE NOT EXISTS (
+         SELECT 1
+           FROM sys.indexes i
+          WHERE i.object_id = OBJECT_ID(req.tabla_obj)
+            AND i.name      = req.nombre_idx
+     )
+);
+
+IF @indices_faltantes > 0
+    THROW 53009, N'Faltan índices de rendimiento requeridos en MMET_BI_DM (revisar script 06).', 1;
+
+-- ============================================================================
 -- 2. VERIFICACIÓN DE AUSENCIA DE DUPLICADOS DE GRANO
 -- ============================================================================
 IF EXISTS (
@@ -120,11 +151,15 @@ IF EXISTS (
     THROW 53007, N'Violación de calidad: asociación incorrecta de DimEventoIndice por instrumento.', 1;
 
 -- ============================================================================
--- 4. PRUEBA DE IDEMPOTENCIA EN CORTE 2026-11-23
+-- 4. PRUEBA DE IDEMPOTENCIA Y PRESERVACIÓN DE CORTES PREVIOS (MERGE)
 -- ============================================================================
 DECLARE @c1 INT = (SELECT COUNT(*) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @sk_corte);
 DECLARE @u1 INT = (SELECT COUNT(*) FROM dm.HechoCumplimientoEvaluaciones WHERE sk_tiempo_corte = @sk_corte);
 DECLARE @r1 INT = (SELECT COUNT(*) FROM dm.HechoResultadosEvaluacion WHERE sk_tiempo_corte = @sk_corte);
+
+DECLARE @prev_c1 INT = (SELECT COUNT(*) FROM dm.HechoContinuidad WHERE sk_tiempo_corte <> @sk_corte);
+DECLARE @prev_u1 INT = (SELECT COUNT(*) FROM dm.HechoCumplimientoEvaluaciones WHERE sk_tiempo_corte <> @sk_corte);
+DECLARE @prev_r1 INT = (SELECT COUNT(*) FROM dm.HechoResultadosEvaluacion WHERE sk_tiempo_corte <> @sk_corte);
 
 EXEC dm.usp_ejecutar_etl @fecha_corte = @fecha_corte;
 
@@ -132,8 +167,143 @@ DECLARE @c2 INT = (SELECT COUNT(*) FROM dm.HechoContinuidad WHERE sk_tiempo_cort
 DECLARE @u2 INT = (SELECT COUNT(*) FROM dm.HechoCumplimientoEvaluaciones WHERE sk_tiempo_corte = @sk_corte);
 DECLARE @r2 INT = (SELECT COUNT(*) FROM dm.HechoResultadosEvaluacion WHERE sk_tiempo_corte = @sk_corte);
 
+DECLARE @prev_c2 INT = (SELECT COUNT(*) FROM dm.HechoContinuidad WHERE sk_tiempo_corte <> @sk_corte);
+DECLARE @prev_u2 INT = (SELECT COUNT(*) FROM dm.HechoCumplimientoEvaluaciones WHERE sk_tiempo_corte <> @sk_corte);
+DECLARE @prev_r2 INT = (SELECT COUNT(*) FROM dm.HechoResultadosEvaluacion WHERE sk_tiempo_corte <> @sk_corte);
+
 IF @c1 <> @c2 OR @u1 <> @u2 OR @r1 <> @r2
     THROW 53008, N'Fallo de idempotencia: los conteos cambiaron al re-ejecutar el ETL para el mismo corte.', 1;
+
+IF @prev_c1 <> @prev_c2 OR @prev_u1 <> @prev_u2 OR @prev_r1 <> @prev_r2
+    THROW 53010, N'Fallo de MERGE incremental: se alteraron filas de cortes históricos previos.', 1;
+
+-- ============================================================================
+-- 4.B PRUEBAS DE ANOMALÍAS RQ-BI-13 (DETECCIÓN, EXCLUSIÓN Y TRAZABILIDAD)
+-- ============================================================================
+PRINT N'=== 0. PRUEBAS DE ANOMALÍAS RQ-BI-13 ===';
+
+-- Prueba 1: Evaluaciones fuera de ventana registradas en dm.etl_incidencias_calidad
+DECLARE @ultima_ejec_ok BIGINT = (
+    SELECT MAX(id_ejecucion_etl)
+      FROM dm.etl_log_ejecuciones
+     WHERE fecha_corte = @fecha_corte AND estado = N'EXITOSO'
+);
+
+IF NOT EXISTS (
+    SELECT 1
+      FROM dm.etl_incidencias_calidad
+     WHERE id_ejecucion_etl = @ultima_ejec_ok
+       AND regla_codigo = N'FECHA_FUERA_VENTANA'
+)
+    THROW 53011, N'Fallo RQ-BI-13: no se registraron incidencias FECHA_FUERA_VENTANA para evaluaciones tardías.', 1;
+
+-- Prueba 2: Registro persistente ante error (fecha de corte fuera de DimTiempo)
+DECLARE @err_capturado BIT = 0;
+BEGIN TRY
+    EXEC dm.usp_ejecutar_etl @fecha_corte = '2099-01-01';
+END TRY
+BEGIN CATCH
+    SET @err_capturado = 1;
+END CATCH;
+
+IF @err_capturado = 0
+    THROW 53012, N'Fallo RQ-BI-13: una fecha de corte inválida no generó error controlado.', 1;
+
+DECLARE @id_ejec_err BIGINT = (
+    SELECT MAX(id_ejecucion_etl)
+      FROM dm.etl_log_ejecuciones
+     WHERE fecha_corte = '2099-01-01' AND estado = N'ERROR'
+);
+
+IF @id_ejec_err IS NULL OR NOT EXISTS (
+    SELECT 1
+      FROM dm.etl_incidencias_calidad
+     WHERE id_ejecucion_etl = @id_ejec_err
+       AND regla_codigo = N'FECHA_CORTE_INVALIDA'
+)
+    THROW 53013, N'Fallo RQ-BI-13: la ejecución fallida o su incidencia no persistieron.', 1;
+
+-- Limpiar registro sintético de la fecha 2099-01-01
+DELETE FROM dm.etl_incidencias_calidad WHERE id_ejecucion_etl = @id_ejec_err;
+DELETE FROM dm.etl_log_ejecuciones     WHERE id_ejecucion_etl = @id_ejec_err;
+
+-- Prueba 3: Anomalía controlada de orden cronológico invertido (FECHA_ORDEN_INVERTIDO)
+--           Se modifica temporalmente un par PSS-10 válido en OLTP, se ejecuta el ETL,
+--           se valida detección + exclusión, y luego se restaura exactamente el OLTP.
+DECLARE @id_res_fin_test   BIGINT;
+DECLARE @id_asig_test      BIGINT;
+DECLARE @fecha_ini_orig    DATE;
+DECLARE @fecha_fin_orig    DATE;
+DECLARE @en_ventana_orig   BIT;
+DECLARE @id_ejec_anomalia  BIGINT;
+
+SELECT TOP 1
+    @id_res_fin_test = hr.id_resultado_final,
+    @id_asig_test    = hr.id_asignacion,
+    @fecha_ini_orig  = ri.fecha_realizacion,
+    @fecha_fin_orig  = rf.fecha_realizacion,
+    @en_ventana_orig = rf.en_ventana
+  FROM dm.HechoResultadosEvaluacion hr
+  JOIN dm.DimInstrumento di ON di.sk_instrumento = hr.sk_instrumento
+  JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion ri ON ri.id_resultado = hr.id_resultado_inicial
+  JOIN [MMET_BI_OLTP].dbo.resultados_evaluacion rf ON rf.id_resultado = hr.id_resultado_final
+ WHERE hr.sk_tiempo_corte = @sk_corte
+   AND di.codigo_instrumento = N'PSS-10'
+   AND rf.fecha_realizacion > ri.fecha_realizacion
+ ORDER BY hr.id_hecho_resultado;
+
+IF @id_res_fin_test IS NOT NULL
+BEGIN
+    BEGIN TRY
+        UPDATE [MMET_BI_OLTP].dbo.resultados_evaluacion
+           SET fecha_realizacion = DATEADD(DAY, -1, @fecha_ini_orig),
+               en_ventana = 0
+         WHERE id_resultado = @id_res_fin_test;
+
+        EXEC dm.usp_ejecutar_etl @fecha_corte = @fecha_corte;
+
+        SET @id_ejec_anomalia = (
+            SELECT MAX(id_ejecucion_etl)
+              FROM dm.etl_log_ejecuciones
+             WHERE fecha_corte = @fecha_corte AND estado = N'EXITOSO'
+        );
+
+        IF NOT EXISTS (
+            SELECT 1
+              FROM dm.etl_incidencias_calidad
+             WHERE id_ejecucion_etl = @id_ejec_anomalia
+               AND regla_codigo = N'FECHA_ORDEN_INVERTIDO'
+               AND id_registro_origen = @id_asig_test
+        )
+            THROW 53014, N'Fallo RQ-BI-13: no se detectó FECHA_ORDEN_INVERTIDO en la anomalía controlada.', 1;
+
+        IF EXISTS (
+            SELECT 1
+              FROM dm.HechoResultadosEvaluacion
+             WHERE sk_tiempo_corte = @sk_corte
+               AND id_resultado_final = @id_res_fin_test
+        )
+            THROW 53015, N'Fallo RQ-BI-13: el par con fecha invertida no fue excluido de HechoResultadosEvaluacion.', 1;
+
+        -- Restaurar dato original en OLTP y restablecer el Data Mart
+        UPDATE [MMET_BI_OLTP].dbo.resultados_evaluacion
+           SET fecha_realizacion = @fecha_fin_orig,
+               en_ventana = @en_ventana_orig
+         WHERE id_resultado = @id_res_fin_test;
+
+        EXEC dm.usp_ejecutar_etl @fecha_corte = @fecha_corte;
+    END TRY
+    BEGIN CATCH
+        -- Garantizar restauración del OLTP ante cualquier fallo de la prueba
+        UPDATE [MMET_BI_OLTP].dbo.resultados_evaluacion
+           SET fecha_realizacion = @fecha_fin_orig,
+               en_ventana = @en_ventana_orig
+         WHERE id_resultado = @id_res_fin_test;
+        THROW;
+    END CATCH;
+END
+
+PRINT N'Pruebas de anomalías RQ-BI-13 (FECHA_FUERA_VENTANA, FECHA_CORTE_INVALIDA, FECHA_ORDEN_INVERTIDO y preservación de cortes) aprobadas.';
 
 -- ============================================================================
 -- 5. REPORTE DE CONTEOS DE DIMENSIONES Y HECHOS
