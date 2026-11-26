@@ -51,7 +51,7 @@ export const EChartBox = forwardRef<EChartBoxHandle, EChartBoxProps>(function EC
     getInstance: () => chartRef.current,
   }));
 
-  // Inicializa la instancia una sola vez, vincula evento click y ResizeObserver
+  // Inicializa la instancia una sola vez, vincula evento click y ResizeObserver con rAF
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -61,7 +61,7 @@ export const EChartBox = forwardRef<EChartBoxHandle, EChartBoxProps>(function EC
       echarts.init(el, undefined, { renderer: 'canvas' });
     chartRef.current = chart;
 
-    const handleClick = (params: any) => {
+    const handleClick = (params: echarts.ECElementEvent) => {
       if (!onItemClickRef.current) return;
       onItemClickRef.current({
         name: String(params?.name ?? ''),
@@ -73,14 +73,20 @@ export const EChartBox = forwardRef<EChartBoxHandle, EChartBoxProps>(function EC
 
     chart.on('click', handleClick);
 
+    let rafId: number | null = null;
     const ro = new ResizeObserver(() => {
-      if (!chart.isDisposed()) {
-        chart.resize();
-      }
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        if (!chart.isDisposed()) {
+          chart.resize();
+        }
+      });
     });
     ro.observe(el);
 
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       ro.disconnect();
       if (!chart.isDisposed()) {
         chart.off('click', handleClick);
@@ -90,18 +96,10 @@ export const EChartBox = forwardRef<EChartBoxHandle, EChartBoxProps>(function EC
     };
   }, []);
 
-  // Reutiliza la instancia con setOption (evita init/dispose y parpadeos al filtrar)
+  // Reutiliza la instancia existente con setOption (sin init/dispose al cambiar filtros)
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    let chart = chartRef.current;
-    if (!chart || chart.isDisposed()) {
-      chart =
-        echarts.getInstanceByDom(el) ||
-        echarts.init(el, undefined, { renderer: 'canvas' });
-      chartRef.current = chart;
-    }
+    const chart = chartRef.current;
+    if (!chart || chart.isDisposed()) return;
 
     const baseTooltip =
       typeof option.tooltip === 'object' && option.tooltip !== null
@@ -118,7 +116,7 @@ export const EChartBox = forwardRef<EChartBoxHandle, EChartBoxProps>(function EC
       tooltip: baseTooltip,
     };
 
-    chart.setOption(mergedOption, { notMerge: true });
+    chart.setOption(mergedOption, { notMerge: true, lazyUpdate: true });
   }, [option]);
 
   return (
