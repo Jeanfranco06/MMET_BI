@@ -161,14 +161,17 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
       {
         accessorKey: 'pares_validos',
         header: 'Pares válidos',
-        cell: ({ row }) => (
-          <DataBarCell
-            value={row.original.pares_validos}
-            max={maxPares}
-            display={`n = ${row.original.pares_validos}`}
-            tone="indigo"
-          />
-        ),
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs font-semibold text-slate-500 italic">&lt; 5 (Suprimido)</span>
+          ) : (
+            <DataBarCell
+              value={row.original.pares_validos}
+              max={maxPares}
+              display={`n = ${row.original.pares_validos}`}
+              tone="indigo"
+            />
+          ),
       },
       {
         accessorKey: 'promedio_inicial',
@@ -480,7 +483,7 @@ export function EvolucionReport({ filtros, corteInicial, semestre }: EvolucionRe
           csvColumns={[
             { header: etiquetaDimension, accessor: (r) => r.dim_clave },
             { header: 'Instrumento', accessor: (r) => r.codigo_instrumento },
-            { header: 'Pares Válidos', accessor: (r) => r.pares_validos },
+            { header: 'Pares Válidos', accessor: (r) => (r.suprimido ? '< 5' : r.pares_validos) },
             { header: 'Suprimido', accessor: (r) => (r.suprimido ? 'SI' : 'NO') },
             { header: 'Promedio Inicial', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_inicial) },
             { header: 'Promedio Final', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_final) },

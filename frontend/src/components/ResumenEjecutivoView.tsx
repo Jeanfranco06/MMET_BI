@@ -82,9 +82,9 @@ export function ResumenEjecutivoView({
         setImpactoPss(pss);
         setImpactoPcl(pcl);
       })
-      .catch((e: any) => {
+      .catch((e: unknown) => {
         if (!active) return;
-        setError(e.message || 'No se pudo cargar el resumen ejecutivo del Data Mart.');
+        setError(e instanceof Error ? e.message : 'No se pudo cargar el resumen ejecutivo del Data Mart.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -105,9 +105,11 @@ export function ResumenEjecutivoView({
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
-        formatter: (params: any[]) => {
-          const p = params[0];
-          const item = rows[p.dataIndex];
+        formatter: (params: unknown) => {
+          const list = Array.isArray(params) ? (params as Array<{ dataIndex?: number }>) : [];
+          const idx = list[0]?.dataIndex ?? -1;
+          const item = rows[idx];
+          if (!item) return '';
           return `<div style="font-weight:700;margin-bottom:4px">${item.codigo_practica} · ${item.nombre_practica}</div>
             <div>Reducción PSS-10: <strong style="color:#5EEAD4">+${Number(item.reduccion_promedio).toFixed(2)} pts</strong></div>
             <div style="color:#94A3B8;font-size:11px">Pares válidos: n = ${item.pares_validos} · Meta: ≥ 4.0 pts</div>`;
@@ -115,7 +117,7 @@ export function ResumenEjecutivoView({
       },
       xAxis: {
         type: 'category',
-        data: rows.map((r: any) => r.codigo_practica),
+        data: rows.map((r: ImpactoPracticaRow) => r.codigo_practica),
         axisLine: { lineStyle: { color: '#E2E8F0' } },
         axisTick: { show: false },
         axisLabel: EXECUTIVE_AXIS_LABEL,
@@ -132,8 +134,8 @@ export function ResumenEjecutivoView({
           name: 'Reducción PSS-10',
           type: 'bar',
           barMaxWidth: 40,
-          data: rows.map((r: any) => ({
-            value: Number(r.reduccion_promedio.toFixed(2)),
+          data: rows.map((r: ImpactoPracticaRow) => ({
+            value: Number((r.reduccion_promedio ?? 0).toFixed(2)),
             itemStyle: {
               borderRadius: [8, 8, 0, 0],
               color: r.cumple_meta
@@ -266,7 +268,11 @@ export function ResumenEjecutivoView({
             unit={!resumen.kpi01_pss10.suprimido ? 'pts' : undefined}
             semaforo={resumen.kpi01_pss10.semaforo}
             metaLabel="Meta: ≥ 4.0 pts"
-            subtitle={`n = ${resumen.kpi01_pss10.pares_validos} pares`}
+            subtitle={
+              resumen.kpi01_pss10.suprimido
+                ? 'n < 5 (Suprimido)'
+                : `n = ${resumen.kpi01_pss10.pares_validos} pares`
+            }
             progressPct={
               resumen.kpi01_pss10.reduccion_promedio != null
                 ? (resumen.kpi01_pss10.reduccion_promedio / 6) * 100
@@ -290,7 +296,11 @@ export function ResumenEjecutivoView({
             unit={!resumen.kpi02_pcl5.suprimido ? 'pts' : undefined}
             semaforo={resumen.kpi02_pcl5.semaforo}
             metaLabel="Meta: ≥ 10.0 pts"
-            subtitle={`n = ${resumen.kpi02_pcl5.pares_validos} pares`}
+            subtitle={
+              resumen.kpi02_pcl5.suprimido
+                ? 'n < 5 (Suprimido)'
+                : `n = ${resumen.kpi02_pcl5.pares_validos} pares`
+            }
             progressPct={
               resumen.kpi02_pcl5.reduccion_promedio != null
                 ? (resumen.kpi02_pcl5.reduccion_promedio / 14) * 100
@@ -314,7 +324,11 @@ export function ResumenEjecutivoView({
             unit={!resumen.kpi03_continuidad.suprimido ? '%' : undefined}
             semaforo={resumen.kpi03_continuidad.semaforo}
             metaLabel="Meta: ≥ 80%"
-            subtitle={`n = ${resumen.kpi03_continuidad.evaluables} evaluables`}
+            subtitle={
+              resumen.kpi03_continuidad.suprimido
+                ? 'n < 5 (Suprimido)'
+                : `n = ${resumen.kpi03_continuidad.evaluables} evaluables`
+            }
             progressPct={resumen.kpi03_continuidad.tasa_continuidad}
             accent="emerald"
             Icon={Users}
@@ -334,7 +348,11 @@ export function ResumenEjecutivoView({
             unit={!resumen.kpi04_cumplimiento.suprimido ? '%' : undefined}
             semaforo={resumen.kpi04_cumplimiento.semaforo}
             metaLabel="Meta: ≥ 90%"
-            subtitle={`n = ${resumen.kpi04_cumplimiento.elegibles} elegibles`}
+            subtitle={
+              resumen.kpi04_cumplimiento.suprimido
+                ? 'n < 5 (Suprimido)'
+                : `n = ${resumen.kpi04_cumplimiento.elegibles} elegibles`
+            }
             progressPct={resumen.kpi04_cumplimiento.tasa_cumplimiento}
             accent="indigo"
             Icon={ClipboardCheck}
@@ -400,7 +418,11 @@ export function ResumenEjecutivoView({
               className="lg:col-span-5"
               title="Distribución de Continuidad Estudiantil"
               subtitle={`Clasificación operativa al corte ${corte} (RO-01 · KPI-03). Clic para explorar casos.`}
-              contextBadge={`${resumen?.kpi03_continuidad.evaluables ?? 0} evaluables`}
+              contextBadge={
+                resumen?.kpi03_continuidad.suprimido
+                  ? 'n < 5 (Suprimido)'
+                  : `${resumen?.kpi03_continuidad.evaluables ?? 0} evaluables`
+              }
               option={chartContinuidadDonut}
               height={270}
               ariaLabel="Gráfico circular de distribución de estados de continuidad"

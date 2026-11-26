@@ -764,7 +764,7 @@ export function TableroVisualView({
   // =========================================================================
   const coRt = coData?.resumen_total;
   const coChartFunnel = useMemo(() => {
-    if (!coRt || Number(coRt.total_registros || 0) === 0) return null;
+    if (!coRt || coRt.suprimido || Number(coRt.total_registros || 0) === 0) return null;
     const total = Number(coRt.total_registros || 0);
     const pct = (v: number) => ((v / Math.max(1, total)) * 100).toFixed(1);
     const op = (st: FunnelStage) => (!coCrossStage || coCrossStage === st ? 1 : 0.28);
@@ -802,7 +802,7 @@ export function TableroVisualView({
   }, [coRt, coCrossStage]);
 
   const coChartDonut = useMemo(() => {
-    if (!coRt) return null;
+    if (!coRt || coRt.suprimido) return null;
     const slices = [
       { key: 'ACTIVO', name: 'Activo', value: Number(coRt.activos ?? 0), color: CHART_COLORS.emerald },
       { key: 'EN_RIESGO', name: 'En riesgo', value: Number(coRt.en_riesgo ?? 0), color: CHART_COLORS.amber },
@@ -861,7 +861,7 @@ export function TableroVisualView({
   }, [cuCrossMomento, cuOps, cuRt]);
 
   const cuChartStacked = useMemo(() => {
-    if (cuOps.length === 0) return null;
+    if (cuOps.length === 0 || cuEffectiveKpi?.suprimido) return null;
     const momentos: Array<'INICIAL' | 'FINAL'> = ['INICIAL', 'FINAL'];
     const countBy = (m: 'INICIAL' | 'FINAL', est: string) =>
       cuOps.filter((o) => o.momento === m && o.estado_evaluacion === est).length;
@@ -1145,7 +1145,9 @@ export function TableroVisualView({
                   unit={!evPssTotal?.suprimido && evPssTotal?.reduccion_promedio != null ? 'pts' : undefined}
                   subtitle={
                     evPssTotal
-                      ? `n = ${evPssTotal.pares_validos} pares · ${evPssTotal.promedio_inicial?.toFixed(1) ?? '—'} → ${evPssTotal.promedio_final?.toFixed(1) ?? '—'}`
+                      ? evPssTotal.suprimido
+                        ? 'n < 5 (Suprimido)'
+                        : `n = ${evPssTotal.pares_validos} pares · ${evPssTotal.promedio_inicial?.toFixed(1) ?? '—'} → ${evPssTotal.promedio_final?.toFixed(1) ?? '—'}`
                       : 'Sin pares PSS-10'
                   }
                   metaLabel="Meta ≥ 4.0 pts"
@@ -1166,7 +1168,9 @@ export function TableroVisualView({
                   unit={!evPclTotal?.suprimido && evPclTotal?.reduccion_promedio != null ? 'pts' : undefined}
                   subtitle={
                     evPclTotal
-                      ? `n = ${evPclTotal.pares_validos} pares · ${evPclTotal.promedio_inicial?.toFixed(1) ?? '—'} → ${evPclTotal.promedio_final?.toFixed(1) ?? '—'}`
+                      ? evPclTotal.suprimido
+                        ? 'n < 5 (Suprimido)'
+                        : `n = ${evPclTotal.pares_validos} pares · ${evPclTotal.promedio_inicial?.toFixed(1) ?? '—'} → ${evPclTotal.promedio_final?.toFixed(1) ?? '—'}`
                       : 'Sin pares PCL-5'
                   }
                   metaLabel="Meta ≥ 10.0 pts"
@@ -1368,12 +1372,12 @@ export function TableroVisualView({
               value={coCrossEstado}
               onChange={(v) => setCoCrossEstado(v)}
               options={[
-                { value: '', label: 'Todos', count: coRt?.total_registros },
-                { value: 'ACTIVO', label: 'Activo', count: coRt?.activos },
-                { value: 'EN_RIESGO', label: 'En riesgo', count: coRt?.en_riesgo },
-                { value: 'ABANDONO', label: 'Abandono', count: coRt?.abandono },
-                { value: 'RETIRADO', label: 'Retirado', count: coRt?.retirados },
-                { value: 'NO_EVALUABLE', label: 'No evaluable', count: coRt?.no_evaluables },
+                { value: '', label: 'Todos', count: coRt?.suprimido ? undefined : coRt?.total_registros },
+                { value: 'ACTIVO', label: 'Activo', count: coRt?.suprimido ? undefined : coRt?.activos },
+                { value: 'EN_RIESGO', label: 'En riesgo', count: coRt?.suprimido ? undefined : coRt?.en_riesgo },
+                { value: 'ABANDONO', label: 'Abandono', count: coRt?.suprimido ? undefined : coRt?.abandono },
+                { value: 'RETIRADO', label: 'Retirado', count: coRt?.suprimido ? undefined : coRt?.retirados },
+                { value: 'NO_EVALUABLE', label: 'No evaluable', count: coRt?.suprimido ? undefined : coRt?.no_evaluables },
               ]}
             />
           </div>
@@ -1404,7 +1408,7 @@ export function TableroVisualView({
                   code="KPI-03 · CONTINUIDAD"
                   title="Tasa de Continuidad"
                   value={coRt?.suprimido ? 'SUPRIMIDO' : coRt?.tasa_continuidad != null ? `${Number(coRt.tasa_continuidad).toFixed(1)}%` : '—'}
-                  subtitle={`${coRt?.continuan ?? 0} de ${coRt?.evaluables ?? 0} evaluables`}
+                  subtitle={coRt?.suprimido ? 'n < 5 (Suprimido)' : `${coRt?.continuan ?? 0} de ${coRt?.evaluables ?? 0} evaluables`}
                   metaLabel="Meta ≥ 80.0%"
                   semaforo={coRt?.semaforo || 'SIN_DATOS'}
                   accent="teal"
@@ -1413,24 +1417,24 @@ export function TableroVisualView({
                 <KpiCard
                   code="COBERTURA"
                   title="Asistencia Acumulada"
-                  value={coRt?.asistencia_pct != null ? `${Number(coRt.asistencia_pct).toFixed(1)}%` : '—'}
-                  subtitle={`${coRt?.asistencias ?? 0} de ${coRt?.sesiones_exigibles ?? 0} sesiones`}
+                  value={coRt?.suprimido ? 'SUPRIMIDO' : coRt?.asistencia_pct != null ? `${Number(coRt.asistencia_pct).toFixed(1)}%` : '—'}
+                  subtitle={coRt?.suprimido ? 'n < 5 (Suprimido)' : `${coRt?.asistencias ?? 0} de ${coRt?.sesiones_exigibles ?? 0} sesiones`}
                   accent="indigo"
                   Icon={Users}
                 />
                 <KpiCard
                   code="ALERTA TEMPRANA"
                   title="En Riesgo"
-                  value={String(coRt?.en_riesgo ?? 0)}
-                  subtitle="Seguimiento preventivo"
+                  value={coRt?.suprimido ? 'Suprimido' : String(coRt?.en_riesgo ?? 0)}
+                  subtitle={coRt?.suprimido ? 'n < 5' : 'Seguimiento preventivo'}
                   accent="amber"
                   Icon={AlertTriangle}
                 />
                 <KpiCard
                   code="DESERCIÓN"
                   title="Abandono / Retiro"
-                  value={`${coRt?.abandono ?? 0} / ${coRt?.retirados ?? 0}`}
-                  subtitle={`No evaluables: ${coRt?.no_evaluables ?? 0}`}
+                  value={coRt?.suprimido ? 'Suprimido' : `${coRt?.abandono ?? 0} / ${coRt?.retirados ?? 0}`}
+                  subtitle={coRt?.suprimido ? 'n < 5' : `No evaluables: ${coRt?.no_evaluables ?? 0}`}
                   accent="rose"
                   Icon={UserX}
                 />
@@ -1463,7 +1467,7 @@ export function TableroVisualView({
                   className="lg:col-span-5"
                   title="Distribución por Estado (Donut)"
                   subtitle="Clic en un segmento para resaltar estado."
-                  contextBadge={`${coRt?.evaluables ?? 0} evaluables`}
+                  contextBadge={coRt?.suprimido ? 'n < 5 (Suprimido)' : `${coRt?.evaluables ?? 0} evaluables`}
                   option={coChartDonut}
                   height={330}
                   ariaLabel="Anillo de estados de continuidad"
@@ -1557,7 +1561,7 @@ export function TableroVisualView({
                   code="KPI-04 · CUMPLIMIENTO"
                   title={cuCrossMomento ? `Cumplimiento (${cuCrossMomento})` : 'Tasa de Cumplimiento'}
                   value={cuEffectiveKpi?.suprimido ? 'SUPRIMIDO' : cuEffectiveKpi?.tasa_cumplimiento != null ? `${Number(cuEffectiveKpi.tasa_cumplimiento).toFixed(1)}%` : '—'}
-                  subtitle={`${cuEffectiveKpi?.elegibles_completadas ?? 0} de ${cuEffectiveKpi?.elegibles ?? 0} elegibles`}
+                  subtitle={cuEffectiveKpi?.suprimido ? 'n < 5 (Suprimido)' : `${cuEffectiveKpi?.elegibles_completadas ?? 0} de ${cuEffectiveKpi?.elegibles ?? 0} elegibles`}
                   metaLabel="Meta ≥ 90.0%"
                   semaforo={cuEffectiveKpi?.semaforo || 'SIN_DATOS'}
                   accent="indigo"
@@ -1566,24 +1570,24 @@ export function TableroVisualView({
                 <KpiCard
                   code="EN VENTANA"
                   title="Completadas en Ventana"
-                  value={String(cuEffectiveKpi?.completadas_en_ventana ?? 0)}
-                  subtitle={`Tardías: ${cuEffectiveKpi?.completadas_tardias ?? 0}`}
+                  value={cuEffectiveKpi?.suprimido ? 'Suprimido' : String(cuEffectiveKpi?.completadas_en_ventana ?? 0)}
+                  subtitle={cuEffectiveKpi?.suprimido ? 'n < 5' : `Tardías: ${cuEffectiveKpi?.completadas_tardias ?? 0}`}
                   accent="emerald"
                   Icon={CheckCircle2}
                 />
                 <KpiCard
                   code="PENDIENTES"
                   title="Pendientes en Ventana"
-                  value={String(cuEffectiveKpi?.pendientes_en_ventana ?? 0)}
-                  subtitle="Dentro de plazo"
+                  value={cuEffectiveKpi?.suprimido ? 'Suprimido' : String(cuEffectiveKpi?.pendientes_en_ventana ?? 0)}
+                  subtitle={cuEffectiveKpi?.suprimido ? 'n < 5' : 'Dentro de plazo'}
                   accent="teal"
                   Icon={Clock}
                 />
                 <KpiCard
                   code="VENCIDAS"
                   title="Oportunidades Vencidas"
-                  value={String(cuEffectiveKpi?.vencidas ?? 0)}
-                  subtitle="Requieren gestión"
+                  value={cuEffectiveKpi?.suprimido ? 'Suprimido' : String(cuEffectiveKpi?.vencidas ?? 0)}
+                  subtitle={cuEffectiveKpi?.suprimido ? 'n < 5' : 'Requieren gestión'}
                   accent="rose"
                   Icon={XCircle}
                 />

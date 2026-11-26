@@ -142,14 +142,17 @@ export function EfectividadPracticaReport({
       {
         accessorKey: 'pares_validos',
         header: 'Pares válidos',
-        cell: ({ row }) => (
-          <DataBarCell
-            value={row.original.pares_validos}
-            max={maxPares}
-            display={`n = ${row.original.pares_validos}`}
-            tone="indigo"
-          />
-        ),
+        cell: ({ row }) =>
+          row.original.suprimido ? (
+            <span className="text-xs font-semibold text-slate-500 italic">&lt; 5 (Suprimido)</span>
+          ) : (
+            <DataBarCell
+              value={row.original.pares_validos}
+              max={maxPares}
+              display={`n = ${row.original.pares_validos}`}
+              tone="indigo"
+            />
+          ),
       },
       {
         accessorKey: 'promedio_inicial',
@@ -374,7 +377,7 @@ export function EfectividadPracticaReport({
               accessor: (r) => (vista === 'practica' ? r.codigo_practica : r.codigo_programa),
             },
             { header: 'Nombre Práctica', accessor: (r) => r.nombre_practica },
-            { header: 'Pares Válidos', accessor: (r) => r.pares_validos },
+            { header: 'Pares Válidos', accessor: (r) => (r.suprimido ? '< 5' : r.pares_validos) },
             { header: 'Promedio Inicial', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_inicial) },
             { header: 'Promedio Final', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.promedio_final) },
             { header: 'Reducción Promedio (pts)', accessor: (r) => (r.suprimido ? 'SUPRIMIDO' : r.reduccion_promedio) },
