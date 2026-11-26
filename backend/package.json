@@ -1,14 +1,20 @@
 {
   "name": "mmet-bi-backend",
   "version": "1.0.0",
-  "description": "NestJS Backend OLTP + BI Analytics para MMET_BI_OLTP (SQL Server)",
+  "description": "NestJS + PostgreSQL: OLTP y Data Mart independientes",
   "private": true,
   "scripts": {
     "build": "nest build",
     "test": "npm run build && node --test test/*.test.cjs",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main"
+    "start:prod": "node dist/main",
+    "db:init": "node scripts/db.cjs init",
+    "db:seed": "node scripts/db.cjs seed",
+    "db:etl": "npm run build && node scripts/db.cjs etl",
+    "db:verify": "node scripts/db.cjs verify",
+    "test:postgres": "npm run build && node --test test/postgres.integration.cjs",
+    "db:create": "node scripts/create-databases.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
@@ -17,16 +23,15 @@
     "@nestjs/platform-express": "^10.4.15",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "msnodesqlv8": "^4.3.2",
-    "mssql": "^11.0.1",
+    "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
     "@types/express": "^5.0.0",
-    "@types/mssql": "^9.1.5",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.2"
   }
 }

@@ -71,7 +71,7 @@ export function LoginScreen({ checking, busy, error, onSubmit }: LoginScreenProp
           <BrandLogo variant="dark" subtitle="Plataforma de Inteligencia de Negocios · UNT 2026-II" />
           <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-800/80 border border-slate-700/80 px-3 py-1 text-xs font-medium text-teal-300">
             <Database className="w-3.5 h-3.5" aria-hidden="true" />
-            Data Mart SQL Server
+            Data Mart PostgreSQL
           </span>
         </div>
 

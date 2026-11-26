@@ -87,14 +87,12 @@ export class AnalyticsService {
 
     const rows = await this.db.queryDm<{ sk_tiempo: number; fecha: string }>(
       `
-      SELECT TOP 1
-        t.sk_tiempo,
-        CONVERT(VARCHAR(10), t.fecha, 23) AS fecha
+      SELECT t.sk_tiempo,
+        to_char(t.fecha, 'YYYY-MM-DD') AS fecha
       FROM dm.DimTiempo t
       WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
         AND t.sk_tiempo <= @targetSk
-      ORDER BY t.sk_tiempo DESC
-      `,
+      ORDER BY t.sk_tiempo DESC LIMIT 1`,
       { targetSk },
     );
 
@@ -104,13 +102,11 @@ export class AnalyticsService {
 
     const latest = await this.db.queryDm<{ sk_tiempo: number; fecha: string }>(
       `
-      SELECT TOP 1
-        t.sk_tiempo,
-        CONVERT(VARCHAR(10), t.fecha, 23) AS fecha
+      SELECT t.sk_tiempo,
+        to_char(t.fecha, 'YYYY-MM-DD') AS fecha
       FROM dm.DimTiempo t
       WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
-      ORDER BY t.sk_tiempo DESC
-      `,
+      ORDER BY t.sk_tiempo DESC LIMIT 1`,
     );
 
     if (latest.length > 0) {
@@ -169,8 +165,8 @@ export class AnalyticsService {
           pr.id_practica AS id_practica_principal,
           pr.codigo_practica,
           pr.nombre_practica,
-          CONVERT(VARCHAR(10), p.fecha_inicio, 23) AS fecha_inicio,
-          CONVERT(VARCHAR(10), p.fecha_cierre, 23) AS fecha_cierre,
+          to_char(p.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+          to_char(p.fecha_cierre, 'YYYY-MM-DD') AS fecha_cierre,
           p.estado_programa
         FROM dm.DimPrograma p
         LEFT JOIN prog_pract pp ON pp.sk_programa = p.sk_programa
@@ -206,15 +202,15 @@ export class AnalyticsService {
         ORDER BY codigo_categoria
       `),
       this.db.queryDm(`
-        SELECT CONVERT(VARCHAR(10), t.fecha, 23) AS fecha_corte
+        SELECT to_char(t.fecha, 'YYYY-MM-DD') AS fecha_corte
         FROM dm.DimTiempo t
         WHERE t.sk_tiempo IN (SELECT DISTINCT sk_tiempo_corte FROM dm.HechoContinuidad)
         ORDER BY t.fecha DESC
       `),
       this.db.queryDm(`
         SELECT
-          CONVERT(VARCHAR(10), MIN(fecha_inicio), 23) AS fecha_min,
-          CONVERT(VARCHAR(10), MAX(fecha_cierre), 23) AS fecha_max
+          to_char(MIN(fecha_inicio), 'YYYY-MM-DD') AS fecha_min,
+          to_char(MAX(fecha_cierre), 'YYYY-MM-DD') AS fecha_max
         FROM dm.DimPrograma
       `),
     ]);
@@ -272,14 +268,14 @@ export class AnalyticsService {
       this.db.queryDm(
         `
         SELECT
-          ISNULL(SUM(CAST(h.EsEvaluable AS INT)), 0) AS evaluables,
-          ISNULL(SUM(CAST(h.Continua AS INT)), 0) AS continuan,
-          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
-          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
-          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
-          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'RETIRADO' AND h.EsEvaluable = 1 THEN 1 ELSE 0 END), 0) AS retirados_evaluables,
-          ISNULL(SUM(CASE WHEN ec.codigo_estado = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
-          ISNULL(SUM(CASE WHEN h.EsEvaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
+          COALESCE(SUM(CAST(h.EsEvaluable AS INT)), 0) AS evaluables,
+          COALESCE(SUM(CAST(h.Continua AS INT)), 0) AS continuan,
+          COALESCE(SUM(CASE WHEN ec.codigo_estado = 'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          COALESCE(SUM(CASE WHEN ec.codigo_estado = 'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          COALESCE(SUM(CASE WHEN ec.codigo_estado = 'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          COALESCE(SUM(CASE WHEN ec.codigo_estado = 'RETIRADO' AND h.EsEvaluable = 1 THEN 1 ELSE 0 END), 0) AS retirados_evaluables,
+          COALESCE(SUM(CASE WHEN ec.codigo_estado = 'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          COALESCE(SUM(CASE WHEN h.EsEvaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
         FROM dm.HechoContinuidad h
         JOIN dm.DimPrograma          p  ON p.sk_programa           = h.sk_programa
         JOIN dm.DimPractica          pr ON pr.sk_practica          = h.sk_practica
@@ -297,12 +293,12 @@ export class AnalyticsService {
         `
         SELECT
           COUNT(*) AS oportunidades_abiertas,
-          ISNULL(SUM(CAST(h.EsElegible AS INT)), 0) AS elegibles,
-          ISNULL(SUM(CAST(h.EsCompletadaElegible AS INT)), 0) AS completadas,
-          ISNULL(SUM(CAST(h.EsEnVentana AS INT)), 0) AS completadas_en_ventana,
-          ISNULL(SUM(CAST(h.EsTardia AS INT)), 0) AS completadas_tardias,
-          ISNULL(SUM(CAST(h.EsVencida AS INT)), 0) AS vencidas,
-          ISNULL(SUM(CAST(h.EsPendiente AS INT)), 0) AS pendientes_en_ventana
+          COALESCE(SUM(CAST(h.EsElegible AS INT)), 0) AS elegibles,
+          COALESCE(SUM(CAST(h.EsCompletadaElegible AS INT)), 0) AS completadas,
+          COALESCE(SUM(CAST(h.EsEnVentana AS INT)), 0) AS completadas_en_ventana,
+          COALESCE(SUM(CAST(h.EsTardia AS INT)), 0) AS completadas_tardias,
+          COALESCE(SUM(CAST(h.EsVencida AS INT)), 0) AS vencidas,
+          COALESCE(SUM(CAST(h.EsPendiente AS INT)), 0) AS pendientes_en_ventana
         FROM dm.HechoCumplimientoEvaluaciones h
         JOIN dm.DimPrograma   p  ON p.sk_programa   = h.sk_programa
         JOIN dm.DimPractica   pr ON pr.sk_practica  = h.sk_practica
@@ -320,8 +316,8 @@ export class AnalyticsService {
         SELECT
           (SELECT COUNT(*) FROM dm.DimEstudiante) AS total_estudiantes,
           (SELECT COUNT(*) FROM dm.DimPrograma) AS total_programas,
-          (SELECT ISNULL(SUM(SesionesExigibles), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS sesiones_realizadas,
-          (SELECT ISNULL(SUM(Asistencias), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS total_asistencias
+          (SELECT COALESCE(SUM(SesionesExigibles), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS sesiones_realizadas,
+          (SELECT COALESCE(SUM(Asistencias), 0) FROM dm.HechoContinuidad WHERE sk_tiempo_corte = @skCorte) AS total_asistencias
         `,
         { skCorte },
       ),
@@ -452,10 +448,10 @@ export class AnalyticsService {
 
     const dimSelect =
       agruparPor === 'facultad'
-        ? `facultad_o_area AS dim_clave, facultad_o_area AS dim_subtitulo, N'' AS codigo_practica, N'' AS estado_programa`
+        ? `facultad_o_area AS dim_clave, facultad_o_area AS dim_subtitulo, '' AS codigo_practica, '' AS estado_programa`
         : agruparPor === 'grupo_etario'
-          ? `grupo_etario AS dim_clave, N'Grupo etario (' + grupo_etario + N' años)' AS dim_subtitulo, N'' AS codigo_practica, N'' AS estado_programa`
-          : `codigo_programa AS dim_clave, codigo_practica + N' · ' + nombre_practica AS dim_subtitulo, codigo_practica, estado_programa`;
+          ? `grupo_etario AS dim_clave, 'Grupo etario (' || grupo_etario || ' años)' AS dim_subtitulo, '' AS codigo_practica, '' AS estado_programa`
+          : `codigo_programa AS dim_clave, codigo_practica || ' · ' || nombre_practica AS dim_subtitulo, codigo_practica, estado_programa`;
 
     const dimGroup =
       agruparPor === 'facultad'
@@ -532,7 +528,7 @@ export class AnalyticsService {
           SUM(CAST(EsIncremento AS INT)) AS aumentaron
         FROM pares
         GROUP BY codigo_instrumento
-        ORDER BY CASE WHEN codigo_instrumento = N'PSS-10' THEN 1 ELSE 2 END
+        ORDER BY CASE WHEN codigo_instrumento = 'PSS-10' THEN 1 ELSE 2 END
         `,
         params,
       ),
@@ -543,9 +539,9 @@ export class AnalyticsService {
         SELECT *
         FROM agrupado
         ORDER BY
-          CASE WHEN codigo_instrumento = N'PSS-10' THEN 1 ELSE 2 END,
+          CASE WHEN codigo_instrumento = 'PSS-10' THEN 1 ELSE 2 END,
           dim_clave ASC
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        LIMIT @pageSize OFFSET @offset
         `,
         params,
       ),
@@ -607,7 +603,7 @@ export class AnalyticsService {
 
     // RG-02: Agregación directa sobre dm.HechoResultadosEvaluacion filtrando por Facultad/Área
     // y Periodo ANTES de agrupar por Práctica × Instrumento (evita doble scan y memory grant
-    // excesivo de GROUPING SETS en instancias SQL Server con poca memoria de workspace).
+    // excesivo de GROUPING SETS en instancias con memoria de workspace limitada).
     const [porPracticaRaw, porProgramaRaw] = await Promise.all([
       this.db.queryDm(
         `
@@ -640,10 +636,10 @@ export class AnalyticsService {
             THEN 1 ELSE 0
           END AS cumple_meta_vista,
           CASE
-            WHEN SUM(CAST(h.ParesValidos AS INT)) < 5 THEN N'SUPRIMIDO'
-            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= MAX(i.meta_reduccion_operativa) THEN N'BUENO'
-            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= 0.0 THEN N'REGULAR'
-            ELSE N'MALO'
+            WHEN SUM(CAST(h.ParesValidos AS INT)) < 5 THEN 'SUPRIMIDO'
+            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= MAX(i.meta_reduccion_operativa) THEN 'BUENO'
+            WHEN (SUM(CAST(h.PuntosReduccion AS DECIMAL(12,4))) / NULLIF(SUM(CAST(h.ParesValidos AS DECIMAL(12,4))), 0)) >= 0.0 THEN 'REGULAR'
+            ELSE 'MALO'
           END AS semaforo_vista,
           SUM(CAST(h.EsReduccion AS INT)) AS disminuyeron,
           SUM(CAST(h.EsSinCambio AS INT)) AS sin_cambio,
@@ -791,7 +787,7 @@ export class AnalyticsService {
           h.SesionesExigibles AS sesiones_exigibles,
           h.Asistencias       AS asistencias,
           h.Inasistencias     AS inasistencias,
-          CAST(ROUND((CAST(h.Asistencias AS FLOAT) / NULLIF(h.SesionesExigibles, 0)) * 100.0, 1) AS DECIMAL(5,1)) AS asistencia_pct,
+          CAST(ROUND((CAST(h.Asistencias AS NUMERIC) / NULLIF(h.SesionesExigibles, 0)) * 100.0, 1) AS DECIMAL(5,1)) AS asistencia_pct,
           h.fecha_primera_asistencia AS primera_asistencia,
           h.fecha_ultima_asistencia  AS ultima_asistencia,
           h.EsEvaluable       AS es_evaluable,
@@ -820,16 +816,16 @@ export class AnalyticsService {
         `${baseCte}
         SELECT
           COUNT(*) AS total_registros,
-          ISNULL(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
-          ISNULL(SUM(CAST(continua AS INT)), 0) AS continuan,
-          ISNULL(SUM(sesiones_exigibles), 0) AS sesiones_exigibles,
-          ISNULL(SUM(asistencias), 0) AS asistencias,
-          ISNULL(SUM(inasistencias), 0) AS inasistencias,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
-          ISNULL(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
+          COALESCE(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
+          COALESCE(SUM(CAST(continua AS INT)), 0) AS continuan,
+          COALESCE(SUM(sesiones_exigibles), 0) AS sesiones_exigibles,
+          COALESCE(SUM(asistencias), 0) AS asistencias,
+          COALESCE(SUM(inasistencias), 0) AS inasistencias,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          COALESCE(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
         FROM filtrado`,
         params,
       ),
@@ -847,34 +843,34 @@ export class AnalyticsService {
           asistencias,
           inasistencias,
           asistencia_pct,
-          CONVERT(VARCHAR(10), primera_asistencia, 23) AS primera_asistencia,
-          CONVERT(VARCHAR(10), ultima_asistencia, 23) AS ultima_asistencia,
+          to_char(primera_asistencia, 'YYYY-MM-DD') AS primera_asistencia,
+          to_char(ultima_asistencia, 'YYYY-MM-DD') AS ultima_asistencia,
           es_evaluable,
           estado_continuidad
         FROM filtrado
         ORDER BY
           CASE estado_continuidad
-            WHEN N'EN_RIESGO' THEN 1
-            WHEN N'ABANDONO' THEN 2
-            WHEN N'RETIRADO' THEN 3
-            WHEN N'ACTIVO' THEN 4
+            WHEN 'EN_RIESGO' THEN 1
+            WHEN 'ABANDONO' THEN 2
+            WHEN 'RETIRADO' THEN 3
+            WHEN 'ACTIVO' THEN 4
             ELSE 5
           END,
           codigo_estudiante ASC
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
+        LIMIT @pageSize OFFSET @offset`,
         params,
       ),
       this.db.queryDm(
         `${baseCte}
         SELECT
           id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica,
-          ISNULL(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
-          ISNULL(SUM(CAST(continua AS INT)), 0) AS continuan,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
-          ISNULL(SUM(CASE WHEN estado_continuidad = N'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
-          ISNULL(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
+          COALESCE(SUM(CAST(es_evaluable AS INT)), 0) AS evaluables,
+          COALESCE(SUM(CAST(continua AS INT)), 0) AS continuan,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'ACTIVO' THEN 1 ELSE 0 END), 0) AS activos,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'EN_RIESGO' THEN 1 ELSE 0 END), 0) AS en_riesgo,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'ABANDONO' THEN 1 ELSE 0 END), 0) AS abandono,
+          COALESCE(SUM(CASE WHEN estado_continuidad = 'RETIRADO' THEN 1 ELSE 0 END), 0) AS retirados,
+          COALESCE(SUM(CASE WHEN es_evaluable = 0 THEN 1 ELSE 0 END), 0) AS no_evaluables
         FROM filtrado
         GROUP BY id_programa, codigo_programa, nombre_programa, codigo_practica, nombre_practica
         ORDER BY id_programa`,
@@ -982,8 +978,8 @@ export class AnalyticsService {
           m.codigo_momento AS momento,
           CASE WHEN ev.es_no_aplica = 1 THEN NULL ELSE ev.codigo_evento_local END AS codigo_evento_local,
           CASE WHEN ev.es_no_aplica = 1 THEN NULL ELSE ev.codigo_categoria END AS categoria_evento,
-          CONVERT(VARCHAR(10), tp.fecha, 23) AS fecha_prevista,
-          CONVERT(VARCHAR(10), tr.fecha, 23) AS fecha_realizacion,
+          to_char(tp.fecha, 'YYYY-MM-DD') AS fecha_prevista,
+          to_char(tr.fecha, 'YYYY-MM-DD') AS fecha_realizacion,
           h.PuntajeObtenido AS puntaje_total,
           h.NumeroVersion   AS numero_version,
           ee.codigo_estado  AS estado_evaluacion,
@@ -1002,8 +998,8 @@ export class AnalyticsService {
                 AND hr.sk_programa      = h.sk_programa
                 AND hr.sk_instrumento   = h.sk_instrumento
                 AND hr.sk_evento_indice = h.sk_evento_indice
-            ) THEN CAST(1 AS BIT)
-            ELSE CAST(0 AS BIT)
+            ) THEN CAST(1 AS SMALLINT)
+            ELSE CAST(0 AS SMALLINT)
           END AS par_valido
         FROM dm.HechoCumplimientoEvaluaciones h
         JOIN dm.DimEstudiante       e  ON e.sk_estudiante        = h.sk_estudiante
@@ -1032,13 +1028,13 @@ export class AnalyticsService {
         ${baseCte}
         SELECT
           COUNT(*) AS total_registros,
-          ISNULL(SUM(CAST(es_elegible AS INT)), 0) AS elegibles,
-          ISNULL(SUM(CAST(es_completada_elegible AS INT)), 0) AS elegibles_completadas,
-          ISNULL(SUM(CAST(EsEnVentana AS INT)), 0) AS completadas_en_ventana,
-          ISNULL(SUM(CAST(EsTardia AS INT)), 0) AS completadas_tardias,
-          ISNULL(SUM(CAST(EsPendiente AS INT)), 0) AS pendientes_en_ventana,
-          ISNULL(SUM(CAST(EsVencida AS INT)), 0) AS vencidas,
-          ISNULL(SUM(CASE WHEN par_valido = 1 THEN 1 ELSE 0 END), 0) AS en_par_valido
+          COALESCE(SUM(CAST(es_elegible AS INT)), 0) AS elegibles,
+          COALESCE(SUM(CAST(es_completada_elegible AS INT)), 0) AS elegibles_completadas,
+          COALESCE(SUM(CAST(EsEnVentana AS INT)), 0) AS completadas_en_ventana,
+          COALESCE(SUM(CAST(EsTardia AS INT)), 0) AS completadas_tardias,
+          COALESCE(SUM(CAST(EsPendiente AS INT)), 0) AS pendientes_en_ventana,
+          COALESCE(SUM(CAST(EsVencida AS INT)), 0) AS vencidas,
+          COALESCE(SUM(CASE WHEN par_valido = 1 THEN 1 ELSE 0 END), 0) AS en_par_valido
         FROM filtrado
         `,
         params,
@@ -1049,11 +1045,11 @@ export class AnalyticsService {
         SELECT *
         FROM filtrado
         ORDER BY
-          CASE WHEN codigo_instrumento = N'PSS-10' THEN 1 ELSE 2 END,
+          CASE WHEN codigo_instrumento = 'PSS-10' THEN 1 ELSE 2 END,
           codigo_estudiante ASC,
           id_programa ASC,
-          CASE WHEN momento = N'INICIAL' THEN 1 ELSE 2 END
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+          CASE WHEN momento = 'INICIAL' THEN 1 ELSE 2 END
+        LIMIT @pageSize OFFSET @offset
         `,
         params,
       ),

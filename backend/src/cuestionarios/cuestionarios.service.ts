@@ -11,12 +11,12 @@ export class CuestionariosService {
     return this.db.query(
       `SELECT op.id_oportunidad,op.codigo_instrumento,op.momento,iv.numero_version,iv.idioma,
               iv.estado_contenido,iv.texto_periodo,iv.instrucciones,
-              CONVERT(VARCHAR(10),op.fecha_ventana_inicio,23) fecha_ventana_inicio,
-              CONVERT(VARCHAR(10),op.fecha_ventana_fin,23) fecha_ventana_fin,
-              CASE WHEN r.id_resultado IS NOT NULL THEN N'COMPLETADA' WHEN b.id_oportunidad IS NOT NULL THEN N'BORRADOR' ELSE N'PENDIENTE' END estado
+              to_char(op.fecha_ventana_inicio, 'YYYY-MM-DD') fecha_ventana_inicio,
+              to_char(op.fecha_ventana_fin, 'YYYY-MM-DD') fecha_ventana_fin,
+              CASE WHEN r.id_resultado IS NOT NULL THEN 'COMPLETADA' WHEN b.id_oportunidad IS NOT NULL THEN 'BORRADOR' ELSE 'PENDIENTE' END estado
        FROM dbo.oportunidades_evaluacion op
-       JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento AND iv.estado_contenido=N'PUBLICADO'
-       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez=N'VALIDO'
+       JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento AND iv.estado_contenido='PUBLICADO'
+       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez='VALIDO'
        LEFT JOIN dbo.respuestas_borrador b ON b.id_oportunidad=op.id_oportunidad AND b.id_estudiante=op.id_estudiante
        WHERE op.id_estudiante=@studentId AND op.aplicable=1
        ORDER BY op.fecha_prevista,op.momento,op.codigo_instrumento`, { studentId });
@@ -44,11 +44,9 @@ export class CuestionariosService {
     this.validateAnswers(answers, items, false);
     const json = JSON.stringify(answers);
     await this.db.query(
-      `MERGE dbo.respuestas_borrador WITH(HOLDLOCK) AS t
-       USING(SELECT @id AS id_oportunidad) AS s ON t.id_oportunidad=s.id_oportunidad
-       WHEN MATCHED THEN UPDATE SET respuestas_json=@json,actualizado_en=SYSDATETIMEOFFSET()
-       WHEN NOT MATCHED THEN INSERT(id_oportunidad,id_estudiante,id_version_instrumento,respuestas_json)
-       VALUES(@id,@student,@version,@json);`,
+      `INSERT INTO dbo.respuestas_borrador(id_oportunidad,id_estudiante,id_version_instrumento,respuestas_json)
+ VALUES(@id,@student,@version,@json)
+ ON CONFLICT(id_oportunidad) DO UPDATE SET respuestas_json=EXCLUDED.respuestas_json,actualizado_en=CURRENT_TIMESTAMP`,
       { id: opportunityId, student: studentId, version: op.id_version_instrumento, json },
     );
     return { ok: true, guardado: answers.length, total: items.length };
@@ -82,38 +80,36 @@ export class CuestionariosService {
     const tx = await this.db.beginTransaction();
     try {
       const check = tx.request(); check.input('idOp', opportunityId);
-      const previousQuery = await check.query(`SELECT TOP 1 id_resultado,numero_version FROM dbo.resultados_evaluacion WITH(UPDLOCK,HOLDLOCK) WHERE id_oportunidad=@idOp AND es_vigente=1 AND estado_validez=N'VALIDO'`);
+      await tx.client.query('SELECT id_oportunidad FROM dbo.oportunidades_evaluacion WHERE id_oportunidad=$1 FOR UPDATE', [opportunityId]);
+      const previousQuery = await check.query(`SELECT id_resultado,numero_version FROM dbo.resultados_evaluacion  WHERE id_oportunidad=@idOp AND es_vigente=1 AND estado_validez='VALIDO' LIMIT 1 FOR UPDATE`);
       const previous = previousQuery.recordset?.[0];
       if (correctionReason && !previous) throw new BadRequestException('El resultado vigente ya no existe; actualice la página.');
       if (!correctionReason && previous) throw new BadRequestException('La evaluación ya fue enviada.');
       if (previous) {
         const replace = tx.request(); replace.input('idPrev', previous.id_resultado);
-        await replace.query(`UPDATE dbo.resultados_evaluacion SET es_vigente=0,estado_validez=N'REEMPLAZADO',vigente_hasta=SYSDATETIMEOFFSET() WHERE id_resultado=@idPrev`);
+        await replace.query(`UPDATE dbo.resultados_evaluacion SET es_vigente=0,estado_validez='REEMPLAZADO',vigente_hasta=CURRENT_TIMESTAMP WHERE id_resultado=@idPrev`);
       }
       const req = tx.request();
       req.input('idOp', opportunityId); req.input('instrument', op.codigo_instrumento); req.input('score', score);
       req.input('date', body.fecha_realizacion); req.input('inWindow', inWindow ? 1 : 0); req.input('actor', actorId);
       req.input('version', previous ? Number(previous.numero_version) + 1 : 1);
       req.input('idPrev', previous?.id_resultado ?? null); req.input('reason', correctionReason ?? null);
-      const inserted = await req.query(`
-        DECLARE @nuevo TABLE(id_resultado BIGINT);
-        INSERT dbo.resultados_evaluacion(id_oportunidad,codigo_instrumento,numero_version,puntaje_total,fecha_realizacion,en_ventana,id_usuario_registro,id_usuario_correccion,id_resultado_reemplazado,motivo_correccion)
-        OUTPUT INSERTED.id_resultado INTO @nuevo VALUES(@idOp,@instrument,@version,@score,CAST(@date AS DATE),@inWindow,@actor,CASE WHEN @idPrev IS NULL THEN NULL ELSE @actor END,@idPrev,@reason);
-        SELECT id_resultado FROM @nuevo;`);
+      const inserted = await req.query(`INSERT INTO dbo.resultados_evaluacion(id_oportunidad,codigo_instrumento,numero_version,puntaje_total,fecha_realizacion,en_ventana,id_usuario_registro,id_usuario_correccion,id_resultado_reemplazado,motivo_correccion)
+ VALUES(@idOp,@instrument,@version,@score,CAST(@date AS DATE),@inWindow,@actor,CASE WHEN @idPrev IS NULL THEN NULL ELSE @actor END,@idPrev,@reason) RETURNING id_resultado`);
       const resultId = inserted.recordset[0].id_resultado;
       for (const answer of scored) {
         const answerReq = tx.request();
         answerReq.input('resultId',resultId); answerReq.input('version',op.id_version_instrumento); answerReq.input('itemId',answer.id_item);
         answerReq.input('value',answer.valor); answerReq.input('scored',answer.puntuado);
-        await answerReq.query(`INSERT dbo.respuestas_evaluacion(id_resultado,id_version_instrumento,id_item,valor_respuesta,valor_puntuado) VALUES(@resultId,@version,@itemId,@value,@scored)`);
+        await answerReq.query(`INSERT INTO dbo.respuestas_evaluacion(id_resultado,id_version_instrumento,id_item,valor_respuesta,valor_puntuado) VALUES(@resultId,@version,@itemId,@value,@scored)`);
       }
       const clean = tx.request(); clean.input('idOp',opportunityId); clean.input('student',op.id_estudiante);
-      await clean.query('DELETE dbo.respuestas_borrador WHERE id_oportunidad=@idOp AND id_estudiante=@student');
+      await clean.query('DELETE FROM dbo.respuestas_borrador WHERE id_oportunidad=@idOp AND id_estudiante=@student');
       await tx.commit();
       return { ok: true, version: previous ? Number(previous.numero_version) + 1 : 1, puntaje_total: score, total_items: items.length, en_ventana: inWindow, mensaje: correctionReason ? 'Corrección versionada; la versión anterior y sus respuestas se conservan.' : 'Respuestas guardadas y puntuación calculada en el servidor.' };
     } catch (error: any) {
       await tx.rollback();
-      if (error?.number === 2601 || error?.number === 2627) throw new BadRequestException('Esta oportunidad ya fue enviada.');
+      if (error?.code === '23505') throw new BadRequestException('Esta oportunidad ya fue enviada.');
       throw error;
     }
   }
@@ -122,13 +118,13 @@ export class CuestionariosService {
     const rows = await this.db.query<any>(
       `SELECT op.id_oportunidad,op.id_estudiante,op.id_version_instrumento,op.codigo_instrumento,op.momento,op.aplicable,
               iv.numero_version,iv.idioma,iv.estado_contenido,iv.periodo_referencia,iv.texto_periodo,iv.instrucciones,
-              CONVERT(VARCHAR(10),op.fecha_ventana_inicio,23) fecha_ventana_inicio,
-              CONVERT(VARCHAR(10),op.fecha_ventana_fin,23) fecha_ventana_fin,
-              CONVERT(VARCHAR(10),CONVERT(date,SYSDATETIMEOFFSET() AT TIME ZONE 'SA Pacific Standard Time'),23) hoy_lima,
+              to_char(op.fecha_ventana_inicio, 'YYYY-MM-DD') fecha_ventana_inicio,
+              to_char(op.fecha_ventana_fin, 'YYYY-MM-DD') fecha_ventana_fin,
+              to_char(CAST(CURRENT_TIMESTAMP AT TIME ZONE 'America/Lima' AS date), 'YYYY-MM-DD') hoy_lima,
               CASE WHEN r.id_resultado IS NULL THEN 0 ELSE 1 END completed
        FROM dbo.oportunidades_evaluacion op
        LEFT JOIN dbo.instrumento_versiones iv ON iv.id_version_instrumento=op.id_version_instrumento
-       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez=N'VALIDO'
+       LEFT JOIN dbo.resultados_evaluacion r ON r.id_oportunidad=op.id_oportunidad AND r.es_vigente=1 AND r.estado_validez='VALIDO'
        WHERE op.id_oportunidad=@id AND (@privileged=1 OR op.id_estudiante=@student) AND op.aplicable=1`,
       { id: opportunityId, student: studentId, privileged: privileged ? 1 : 0 },
     );

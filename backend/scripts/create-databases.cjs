@@ -1,0 +1,4 @@
+const fs=require('fs');const {pool}=require('./connection.cjs');
+// Explicit creation step for local PostgreSQL. OCI users can create databases beforehand.
+(async()=>{for(const prefix of ['OLTP','DM']){const target=pool(prefix);const name=target.options.database;if(!/^[a-z][a-z0-9_]*$/.test(name))throw new Error('Nombre de base inválido');const options={...target.options,password:target.options.password,database:'postgres'};const {Pool}=require('pg');const admin=new Pool(options);try{if(!(await admin.query('SELECT 1 FROM pg_database WHERE datname=$1',[name])).rowCount){await admin.query(`CREATE DATABASE "${name}"`);console.log('Base creada:',name);}else console.log('Base existente:',name);}finally{await admin.end();await target.end();}}})().catch(e=>{console.error(e.message);process.exitCode=1;});
+

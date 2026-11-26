@@ -1,0 +1,9 @@
+.git
+.local
+**/node_modules
+**/dist
+**/.next
+**/.env
+**/.env.local
+**/.env.*.local
+**/.local-admin-credentials.txt
